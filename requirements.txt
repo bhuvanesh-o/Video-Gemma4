@@ -1,0 +1,15 @@
+opencv-python
+numpy
+matplotlib
+scipy
+pandas
+paddlepaddle
+paddleocr
+openpyxl
+onnxruntime
+torch
+torchvision
+transformers
+accelerate
+huggingface_hub
+Pillow
