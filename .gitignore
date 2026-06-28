@@ -1,3 +1,39 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+
+# ── Virtual environment ──────────────────────────────────────────────────────
 venv/
 .venv/
+env/
+
+# ── Model weights (large binaries — let the auto-download guard fetch these) ─
 *.onnx
+*.pt
+
+# ── Source videos & sliced segments (large media, regenerable from source) ──
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ── Generated images (diagnostic plots + truck/plate crops) ─────────────────
+*.png
+*.jpg
+*.jpeg
+
+# ── Generated data outputs (regenerated each run, not source-of-truth code) ─
+segment_timestamps.xlsx
+Vehicle_Registry_Master.xlsx
+LLM_Analysis_Report_Gemma4.txt
+*.xlsx
+*.csv
+
+# ── Pipeline scratch/output folders ──────────────────────────────────────────
+temp/
+final_assets/
+trial_video_segments/
+
+# ── Secrets, if you ever add any back ────────────────────────────────────────
+.env
+credentials.json
+token.pickle
