@@ -28,16 +28,17 @@ import pandas as pd  # 🌟 CRITICAL: Pandas is here to make the Excel sheet!
 # 1. LOCAL DIRECTORY SETUP
 # Colab's drive.mount() is gone — these now point straight at local folders.
 # 🔧 EDIT THIS to match wherever you keep the videos on your machine.
-MASTER_DIR = r"C:\Users\YourName\Videos\GEMMA\trial_main_video"
+MAIN_VIDEO_DIR = r"D:\Traffic_Control\trial_main_video"
+MASTER_DIR = r"D:\Traffic_Control"
 SEGMENT_DIR = os.path.join(MASTER_DIR, "trial_video_segments")
 EXCEL_PATH = os.path.join(MASTER_DIR, "segment_timestamps.xlsx")
 
 if not os.path.exists(MASTER_DIR):
-    raise FileNotFoundError(f"⚠️ Could not find processing folder: {MASTER_DIR}.")
+    raise FileNotFoundError(f"⚠️ Could not find processing folder: {MAIN_VIDEO_DIR}.")
 
 os.makedirs(SEGMENT_DIR, exist_ok=True)  # Create the output folder for sliced clips if it doesn't exist yet
 
-all_files = os.listdir(MASTER_DIR)
+all_files = os.listdir(MAIN_VIDEO_DIR)
 video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
 video_paths = [f for f in all_files if f.lower().endswith(video_extensions)]
 
@@ -98,7 +99,7 @@ def slice_physical_mp4(input_path, start_sec, end_sec, output_path, fps):
 # ==============================================================================
 
 for idx, v_name in enumerate(video_paths, 1):
-    v_path = os.path.join(MASTER_DIR, v_name)
+    v_path = os.path.join(MAIN_VIDEO_DIR, v_name)
     cap = cv2.VideoCapture(v_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
 

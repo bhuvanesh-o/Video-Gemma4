@@ -42,8 +42,8 @@ from PIL import Image
 from transformers import AutoProcessor, AutoModelForMultimodalLM
 
 # 🔧 EDIT THESE to point at your local equivalents of the Drive folders
-VIDEO_DIR = r"C:\Users\YourName\GEMMA\trial_main_video\trial_video_segments\truck_video_trial"
-REPORT_FILE_PATH = r"C:\Users\YourName\GEMMA\trial_main_video\LLM_Analysis_Report_Gemma4.txt"
+VIDEO_DIR = r"D:\Traffic_Control\trial_video_segments"
+REPORT_FILE_PATH = r"D:\Traffic_Control\LLM_Analysis_Report_Gemma4.txt"
 
 if not os.path.exists(VIDEO_DIR):
     raise FileNotFoundError(f"⚠️ Could not find folder: {VIDEO_DIR}")

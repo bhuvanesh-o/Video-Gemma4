@@ -30,7 +30,8 @@ import pandas as pd  # ── 🌟 UPDATE PART: Imported Pandas for native Excel
 # (e.g. on your Ryzen/HP machine). Use raw strings (r"...") on Windows so
 # backslashes don't get treated as escape characters.
 VIDEO_DIR = r"D:\Traffic_Control\trial_main_video"  # 🔧 EDIT THIS
-SAVE_DIR = r"C:\D:\Traffic_Control"   # 🔧 EDIT THIS
+SAVE_DIR = r"D:\Traffic_Control"   # 🔧 EDIT THIS
+
 
 if not os.path.exists(VIDEO_DIR):
     raise FileNotFoundError(f"⚠️ Could not find folder: {VIDEO_DIR}. Check your path spelling!")
@@ -181,7 +182,7 @@ for v_name, data in all_videos_data.items():
     video_base_name = os.path.splitext(v_name)[0]
 
     print(f"\n==========================================================")
-    print(f"📋 LLM PIPELINE REPORT SUMMARY FOR ASSET: {v_name}")
+    print(f"📋 REPORT SUMMARY FOR ASSET: {v_name}")
     print(f"==========================================================")
 
     for name, filtered_array in metrics_filtered.items():

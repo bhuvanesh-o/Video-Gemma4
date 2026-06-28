@@ -40,16 +40,17 @@ from step_2_functions_video_slice_excel_timestamp import (
 def main():
     # 1. LOCAL DIRECTORY SETUP
     # 🔧 EDIT THIS to match wherever you keep the videos on your machine.
+    MAIN_VIDEO_DIR = r"D:\Traffic_Control\trial_main_video"
     MASTER_DIR = r"D:\Traffic_Control"
     SEGMENT_DIR = os.path.join(MASTER_DIR, "trial_video_segments")
     EXCEL_PATH = os.path.join(MASTER_DIR, "segment_timestamps.xlsx")
 
-    if not os.path.exists(MASTER_DIR):
-        raise FileNotFoundError(f"⚠️ Could not find processing folder: {MASTER_DIR}.")
+    if not os.path.exists(MAIN_VIDEO_DIR):
+        raise FileNotFoundError(f"⚠️ Could not find processing folder: {MAIN_VIDEO_DIR}.")
 
     os.makedirs(SEGMENT_DIR, exist_ok=True)  # Create the output folder for sliced clips if it doesn't exist yet
 
-    all_files = os.listdir(MASTER_DIR)
+    all_files = os.listdir(MAIN_VIDEO_DIR)
     video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
     video_paths = [f for f in all_files if f.lower().endswith(video_extensions)]
 
@@ -73,7 +74,7 @@ def main():
     # ==============================================================================
 
     for idx, v_name in enumerate(video_paths, 1):
-        v_path = os.path.join(MASTER_DIR, v_name)
+        v_path = os.path.join(MAIN_VIDEO_DIR, v_name)
         print(f"\n🎬 [Asset {idx}/{len(video_paths)}] Processing: {v_name}")
 
         result = extract_cosine_curve(v_path, savgol_window=SAVGOL_WINDOW, savgol_poly=SAVGOL_POLY, bins=BINS)

@@ -62,15 +62,11 @@ import onnxruntime as ort
 # 🔧 EDIT THESE to point at your local equivalents of the Drive folders
 # (e.g. your local Google Drive Desktop sync mirror, or any plain local folder).
 # Input source spreadsheet containing timestamps and structural video segment references
-TIMESTAMPS_EXCEL = r"C:\Users\YourName\GEMMA\trial_main_video\segment_timestamps.xlsx"
-# Root folder where physical pre-sliced video segment .mp4 clips are stored
-SEGMENT_DIR      = r"C:\Users\YourName\GEMMA\trial_main_video\trial_video_segments\truck_video_trial"
-# Master asset output directory for crops, logs, and annotated reference videos
-ASSET_DIR        = r"C:\Users\YourName\GEMMA\trial_main_video\final_assets"
-# Path to the compiled YOLOX object detection model weights file
-ONNX_PATH        = r"C:\Users\YourName\GEMMA\models\yolox_small.onnx"
-# Local scratch folder for temporary per-segment video copies (was /content/ on Colab)
-TEMP_DIR         = r"C:\Users\YourName\GEMMA\temp"
+TIMESTAMPS_EXCEL = r"D:\Traffic_Control\segment_timestamps.xlsx"
+SEGMENT_DIR      = r"D:\Traffic_Control\trial_video_segments"
+ASSET_DIR        = r"D:\Traffic_Control\final_assets"
+ONNX_PATH        = r"D:\Traffic_Control\yolox_small.onnx"
+TEMP_DIR         = r"D:\Traffic_Control\temp"
 
 # 🧠 1B: DETECTOR INPUT CORE SETTINGS
 # ------------------------------------------------------------------------------

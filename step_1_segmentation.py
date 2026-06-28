@@ -115,7 +115,7 @@ def main():
         video_base_name = os.path.splitext(v_name)[0]
 
         print(f"\n==========================================================")
-        print(f"📋 LLM PIPELINE REPORT SUMMARY FOR ASSET: {v_name}")
+        print(f"📋 REPORT SUMMARY FOR ASSET: {v_name}")
         print(f"==========================================================")
 
         for name, filtered_array in metrics_filtered.items():
