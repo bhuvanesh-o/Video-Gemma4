@@ -41,8 +41,8 @@ from step_4_functions_prompt_document import (
 )
 
 # 🔧 EDIT THESE to point at your local equivalents of the Drive folders
-VIDEO_DIR = r"C:\Users\YourName\GEMMA\trial_main_video\trial_video_segments\truck_video_trial"
-REPORT_FILE_PATH = r"C:\Users\YourName\GEMMA\trial_main_video\LLM_Analysis_Report_Gemma4.txt"
+VIDEO_DIR = r"D:\Traffic_Control\trial_video_segments"
+REPORT_FILE_PATH = r"D:\Traffic_Control\LLM_Analysis_Report_Gemma4.txt"
 
 if not os.path.exists(VIDEO_DIR):
     raise FileNotFoundError(f"⚠️ Could not find folder: {VIDEO_DIR}")
@@ -84,21 +84,24 @@ print(f"⚙️ Sandbox settings registered! Frame step rate assigned: {FRAME_INT
 # ==============================================================================
 # ── MASTER FILE TRACKING & INFERENCE LOOP ─────────────────────────────────────
 # ==============================================================================
-all_files = os.listdir(VIDEO_DIR)
 video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
-# Sorted to process segment_1, segment_2 in chronological order
-video_paths = sorted([f for f in all_files if f.lower().endswith(video_extensions)])
+
+video_paths = []
+for subfolder in sorted(os.listdir(VIDEO_DIR)):
+    subfolder_path = os.path.join(VIDEO_DIR, subfolder)
+    if os.path.isdir(subfolder_path):
+        for f in sorted(os.listdir(subfolder_path)):
+            if f.lower().endswith(video_extensions):
+                video_paths.append(os.path.join(subfolder_path, f))
 
 print(f"📦 Found {len(video_paths)} pre-cut segments in {VIDEO_DIR}.")
 
-for idx, v_name in enumerate(video_paths, 1):
+for idx, v_path in enumerate(video_paths, 1):
+    v_name = os.path.basename(v_path)
     print(f"\n==========================================================")
     print(f"🎬 PROCESSING SEGMENT {idx}/{len(video_paths)}: {v_name}")
     print(f"==========================================================")
 
-    v_path = os.path.join(VIDEO_DIR, v_name)
-
-    # 1. Extract frames directly from the physical segment
     snapshot_slideshow, duration = extract_segment_storyboard(v_path, FRAME_INTERVAL_SECONDS)
     num_frames_extracted = len(snapshot_slideshow)
 
@@ -112,7 +115,6 @@ for idx, v_name in enumerate(video_paths, 1):
     try:
         gemma_text = run_gemma_inference(processor, model, snapshot_slideshow, CORE_PROMPT, DEVICE, DTYPE)
 
-        # Format and save the result
         segment_result = (
             f"📍 Source Segment: {v_name} | Duration: {duration:.1f}s | Sampled {num_frames_extracted} frames\n"
             f"📝 Local Gemma 4 Summary:\n{gemma_text.strip()}\n"

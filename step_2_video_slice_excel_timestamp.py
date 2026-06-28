@@ -40,7 +40,7 @@ from step_2_functions_video_slice_excel_timestamp import (
 def main():
     # 1. LOCAL DIRECTORY SETUP
     # 🔧 EDIT THIS to match wherever you keep the videos on your machine.
-    MASTER_DIR = r"C:\Users\YourName\Videos\GEMMA\trial_main_video"
+    MASTER_DIR = r"D:\Traffic_Control"
     SEGMENT_DIR = os.path.join(MASTER_DIR, "trial_video_segments")
     EXCEL_PATH = os.path.join(MASTER_DIR, "segment_timestamps.xlsx")
 

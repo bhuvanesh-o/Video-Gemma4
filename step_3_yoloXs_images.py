@@ -57,11 +57,11 @@ def main():
     # ------------------------------------------------------------------------------
     # 🔧 EDIT THESE to point at your local equivalents of the Drive folders
     # (e.g. your local Google Drive Desktop sync mirror, or any plain local folder).
-    TIMESTAMPS_EXCEL = r"C:\Users\YourName\GEMMA\trial_main_video\segment_timestamps.xlsx"
-    SEGMENT_DIR      = r"C:\Users\YourName\GEMMA\trial_main_video\trial_video_segments\truck_video_trial"
-    ASSET_DIR        = r"C:\Users\YourName\GEMMA\trial_main_video\final_assets"
-    ONNX_PATH        = r"C:\Users\YourName\GEMMA\models\yolox_small.onnx"
-    TEMP_DIR         = r"C:\Users\YourName\GEMMA\temp"
+    TIMESTAMPS_EXCEL = r"D:\Traffic_Control\segment_timestamps.xlsx"
+    SEGMENT_DIR      = r"D:\Traffic_Control\trial_video_segments"
+    ASSET_DIR        = r"D:\Traffic_Control\final_assets"
+    ONNX_PATH        = r"D:\Traffic_Control\yolox_small.onnx"
+    TEMP_DIR         = r"D:\Traffic_Control\temp"
 
     # 🧠 1B: DETECTOR INPUT CORE SETTINGS
     # ------------------------------------------------------------------------------
@@ -194,7 +194,8 @@ def main():
         t_start = row["Start_Time"]
 
         segment_filename = f"segment_{seg_id}.mp4"
-        drive_video_path = os.path.join(SEGMENT_DIR, segment_filename)
+        video_base_name = os.path.splitext(master_video_name)[0]
+        drive_video_path = os.path.join(SEGMENT_DIR, video_base_name, segment_filename)
 
         if not os.path.exists(drive_video_path):
             continue

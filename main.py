@@ -3,14 +3,16 @@
 main.py
 
 Top-level orchestrator. Runs the full pipeline in order:
-  1. Gemma_Segment        — change-point detection, plots, segment timestamps → Excel
-  2. Gemma_Slice_and_Excel_timestamps — cosine segmentation + physical video slicing → Excel
+  1. step_1_segmentation              — change-point detection, plots, segment timestamps → Excel
+  2. step_2_video_slice_excel_timestamp — cosine segmentation + physical video slicing → Excel
+  3. step_3_yoloXs_images             — YOLOX truck detection, tracking, crops → Excel
+  4. step_4_prompt_document           — Gemma 4 multimodal inference → text report (optional)
 """
 
 import step_1_segmentation
 import step_2_video_slice_excel_timestamp
 import step_3_yoloXs_images
-import step_4_prompt_document
+# import step_4_prompt_document
 
 
 def main():
@@ -25,14 +27,16 @@ def main():
     step_2_video_slice_excel_timestamp.main()
 
     print("\n" + "=" * 60)
-    print("STEP 2: VIDEO SLICING & EXCEL LOGGING")
+    print("STEP 3: VIDEO SLICING & EXCEL LOGGING")
     print("=" * 60)
     step_3_yoloXs_images.main()
 
+    '''
     print("\n" + "=" * 60)
-    print("STEP 2: VIDEO SLICING & EXCEL LOGGING")
+    print("STEP 4: VIDEO SLICING & EXCEL LOGGING")
     print("=" * 60)
     step_4_prompt_document.main()
+    '''
 
     print("\n🏁 Full pipeline complete.")
 

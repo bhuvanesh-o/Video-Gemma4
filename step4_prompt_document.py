@@ -153,19 +153,25 @@ def extract_segment_storyboard(video_path, interval):
     return images, duration
 
 # ── MASTER FILE TRACKING & INFERENCE LOOP ─────────────────────────────────────
-all_files = os.listdir(VIDEO_DIR)
 video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
-# Sorted to process segment_1, segment_2 in chronological order
-video_paths = sorted([f for f in all_files if f.lower().endswith(video_extensions)])
+
+video_paths = []
+for subfolder in sorted(os.listdir(VIDEO_DIR)):
+    subfolder_path = os.path.join(VIDEO_DIR, subfolder)
+    if os.path.isdir(subfolder_path):
+        for f in sorted(os.listdir(subfolder_path)):
+            if f.lower().endswith(video_extensions):
+                video_paths.append(os.path.join(subfolder_path, f))
 
 print(f"📦 Found {len(video_paths)} pre-cut segments in {VIDEO_DIR}.")
 
-for idx, v_name in enumerate(video_paths, 1):
+for idx, v_path in enumerate(video_paths, 1):
+    v_name = os.path.basename(v_path)
     print(f"\n==========================================================")
     print(f"🎬 PROCESSING SEGMENT {idx}/{len(video_paths)}: {v_name}")
     print(f"==========================================================")
 
-    v_path = os.path.join(VIDEO_DIR, v_name)
+    
 
     # 1. Extract frames directly from the physical segment
     snapshot_slideshow, duration = extract_segment_storyboard(v_path, FRAME_INTERVAL_SECONDS)

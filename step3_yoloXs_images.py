@@ -357,7 +357,8 @@ for idx, row in df_times.iterrows():
     t_start = row["Start_Time"]
 
     segment_filename = f"segment_{seg_id}.mp4"
-    drive_video_path = os.path.join(SEGMENT_DIR, segment_filename)
+    video_base_name = os.path.splitext(master_video_name)[0]
+    drive_video_path = os.path.join(SEGMENT_DIR, video_base_name, segment_filename)
 
     if not os.path.exists(drive_video_path):
         continue
