@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-segment_pipeline_lib.py
+step_1_functions_segmentation.py
 
-Reusable functions pulled out of Gemma_Segment.py so they can be imported
+Reusable functions pulled out of step_1_segmentation.py so they can be imported
 and called from anywhere instead of living inline in one long script.
 
 Each function below corresponds to one of the original "long chunks":
