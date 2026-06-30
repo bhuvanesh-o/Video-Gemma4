@@ -1,26 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-Gemma_Segment.py
+step_1_segmentation.py
 
 We are looking through the MAIN VIDEO and plotting the CHANGE POINT GRAPH and
 we are updating all the SEGMENT TIMES INTO EXCEL SHEET and we will also print
 the timings of each segment in the O/P also.
 
 REFACTOR NOTE: The long processing chunks (per-video extraction, peak/segment
-detection, plotting, Excel merge) now live in segment_pipeline_lib.py as
+detection, plotting, Excel merge) now live in step_1_functions_segmentation.py as
 callable functions. This file just holds your config/tuning parameters and
 orchestrates the two main loops by calling into that library.
 
 The whole thing is wrapped in main() so this file can either be run directly
-(`python Gemma_Segment.py`) or imported and called from a higher-level
+(`python step_1_segmentation.py.py`) or imported and called from a higher-level
 orchestrator script, e.g.:
-    import gemma_segment
-    gemma_segment.main()
+    import step_1_segmentation.py
+    step_1_segmentation.py.main()
 
 NOTE: Before running, install dependencies in your terminal:
     pip install opencv-python numpy matplotlib scipy pandas openpyxl
 
-Make sure segment_pipeline_lib.py is in the same folder as this script (or
+Make sure step_1_functions_segmentation.py is in the same folder as this script (or
 somewhere on your PYTHONPATH) so the import below resolves.
 """
 
