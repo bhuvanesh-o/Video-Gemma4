@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-gemma_prompt_pipeline_lib.py
+step_4_functions_prompt_document.py
 
-Reusable functions pulled out of Gemma_Prompt_document.py.
+Reusable functions pulled out of step_4_prompt_document.py.
 
   - detect_device            <- CUDA/CPU + dtype auto-detection
   - load_gemma_model         <- Cell 1's model-loading try/except block
