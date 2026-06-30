@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Gemma_YOLOXs_images.py
+step_3_yoloXs_images.py
 
 We pass the VIDEO SEGMENTS into the YOLOX-s model so that we can detect the
 TRUCKS and then ASSIGN ID's to them, get their IN & OUT TIME, the NUMBER OF
@@ -11,15 +11,15 @@ VIDEO SEGMENTS into a local folder.
 
 REFACTOR NOTE: The long processing chunks (ONNX session loading, per-segment
 detect+track loop, track merging, database compilation, Excel export) now
-live in yolox_pipeline_lib.py as callable functions/classes. This file just
+live in step_3_functions_yoloXs_images.py as callable functions/classes. This file just
 holds your config/tuning parameters and orchestrates the per-segment loop by
 calling into that library.
 
 The whole thing is wrapped in main() so this file can either be run directly
-(`python Gemma_YOLOXs_images.py`) or imported and called from a higher-level
+(`python step_3_yoloXs_images.py`) or imported and called from a higher-level
 orchestrator script, e.g.:
-    import gemma_yoloxs_images
-    gemma_yoloxs_images.main()
+    import step_3_yoloXs_images.py
+    step_3_yoloXs_images.py.main()
 
 NOTE: Before running, in your terminal:
     pip install paddlepaddle paddleocr onnxruntime pandas openpyxl opencv-python numpy
@@ -30,7 +30,7 @@ missing — no manual `!wget` needed.
 NOTE: Fully local — no Google Drive, no Drive API, no OAuth. Excel hyperlinks
 point straight at local .jpg paths — click "View Truck"/"View Plate" to open.
 
-Make sure yolox_pipeline_lib.py is in the same folder as this script (or
+Make sure step_3_functions_yoloXs_images.py is in the same folder as this script (or
 somewhere on your PYTHONPATH) so the import below resolves.
 """
 
