@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-slice_pipeline_lib.py
+step_2_functions_video_slice_excel_timestamp.py
 
-Reusable functions pulled out of Gemma_Slice_and_Excel_timestamps.py.
+Reusable functions pulled out of step_2_video_slice_excel_timestamp.py.
 
   - compute_histogram      <- unchanged helper
   - extract_cosine_curve   <- per-video frame sampling + Cosine distance + smoothing
