@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Gemma_Prompt_document.py
+step_4_prompt_document.py
 
 In this we will get the GEMMA 4 model from HUGGING FACE and then we will pass
 the VIDEO SEGMENTS into the model by following the PROMPT and then we will
@@ -8,7 +8,7 @@ just display the output for each segment based on the prompt.
 
 REFACTOR NOTE: The long processing chunks (device detection, model loading,
 frame storyboard extraction, the actual Gemma inference call, GPU memory
-cleanup) now live in gemma_prompt_pipeline_lib.py as callable functions. This
+cleanup) now live in step_4_functions_prompt_document.py as callable functions. This
 file just holds your config/prompt and orchestrates the per-segment loop by
 calling into that library.
 
@@ -25,7 +25,7 @@ be VERY slow for a multimodal model with up to 20 image frames per segment —
 expect minutes per segment, not seconds. For real throughput, keep this
 particular step running in Colab and only run the others locally.
 
-Make sure gemma_prompt_pipeline_lib.py is in the same folder as this script
+Make sure step_4_functions_prompt_document.py is in the same folder as this script
 (or somewhere on your PYTHONPATH) so the import below resolves.
 """
 
