@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-yolox_pipeline_lib.py
+step_3_functions_yoloXs_images.py
 
-Reusable functions/classes pulled out of Gemma_YOLOXs_images.py.
+Reusable functions/classes pulled out of step_3_yoloXs_images.py.
 
   - ensure_yolox_weights      <- auto-download guard for the ONNX weights
   - load_yolox_session        <- Section 2 (load the ONNX Runtime session)
