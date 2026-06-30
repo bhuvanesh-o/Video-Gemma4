@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Gemma_Slice_and_Excel_timestamps.py
+step_2_video_slice_excel_timestamp.py
 
 This is where we SLICE THE MAIN VIDEO INTO SEGMENTS based on the calculations
 it is again doing (yes there are redundancies of the same process... like
@@ -9,20 +9,20 @@ later) and save the segments in a folder.
 
 REFACTOR NOTE: The long processing chunks (per-video Cosine extraction,
 peak/segment detection, slicing+Excel logging, Excel merge) now live in
-slice_pipeline_lib.py as callable functions. This file just holds your
+step_2_functions_video_slice_excel_timestamp.py as callable functions. This file just holds your
 config/tuning parameters and orchestrates the single processing loop by
 calling into that library.
 
 The whole thing is wrapped in main() so this file can either be run directly
 (`python Gemma_Slice_and_Excel_timestamps.py`) or imported and called from a
 higher-level orchestrator script, e.g.:
-    import gemma_slice_and_excel_timestamps
-    gemma_slice_and_excel_timestamps.main()
+    import step_2_video_slice_excel_timestamp.py
+    step_2_video_slice_excel_timestamp.py.main()
 
 NOTE: Before running, install dependencies in your terminal:
     pip install opencv-python numpy scipy pandas openpyxl
 
-Make sure slice_pipeline_lib.py is in the same folder as this script (or
+Make sure step_2_functions_video_slice_excel_timestamp.py is in the same folder as this script (or
 somewhere on your PYTHONPATH) so the import below resolves.
 """
 
