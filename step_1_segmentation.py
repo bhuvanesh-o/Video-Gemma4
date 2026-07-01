@@ -12,16 +12,21 @@ callable functions. This file just holds your config/tuning parameters and
 orchestrates the two main loops by calling into that library.
 
 The whole thing is wrapped in main() so this file can either be run directly
-(`python step_1_segmentation.py.py`) or imported and called from a higher-level
+(`python step_1_segmentation.py`) or imported and called from a higher-level
 orchestrator script, e.g.:
-    import step_1_segmentation.py
-    step_1_segmentation.py.main()
+    import step_1_segmentation
+    step_1_segmentation.main(job_id="local_test")
+
+REFACTOR NOTE 2: Hardcoded D:\\Traffic_Control paths are replaced by storage.path_for()
+so every run is isolated to its own job folder. print() is replaced by emit() from
+progress.py so progress can be streamed to a browser later via FastAPI SSE while
+still printing locally when run from the command line.
 
 NOTE: Before running, install dependencies in your terminal:
     pip install opencv-python numpy matplotlib scipy pandas openpyxl
 
-Make sure step_1_functions_segmentation.py is in the same folder as this script (or
-somewhere on your PYTHONPATH) so the import below resolves.
+Make sure step_1_functions_segmentation.py, storage.py, and progress.py are in the
+same folder as this script (or somewhere on your PYTHONPATH) so the imports below resolve.
 """
 
 import os
@@ -35,22 +40,27 @@ from step_1_functions_segmentation import (
     render_segment_plot,
     save_segment_excel,
 )
+from storage import path_for, dir_for
+from progress import emit
 
 
-def main():
-    # ── LOCAL PATH CONFIG ─────────────────────────────────────────────────────
-    # Use raw strings (r"...") on Windows so backslashes don't get treated as escape characters.
-    VIDEO_DIR = r"D:\Traffic_Control\trial_main_video"  # 🔧 EDIT THIS
-    SAVE_DIR = r"D:\Traffic_Control"   # 🔧 EDIT THIS
+def main(job_id):
+    # ── JOB-SCOPED PATH CONFIG ────────────────────────────────────────────────
+    # Replaces hardcoded D:\Traffic_Control paths with job-scoped folders so
+    # every upload/run is fully isolated from every other job on the server.
+    # path_for() auto-creates the folder if it doesn't exist yet.
+    VIDEO_DIR = dir_for(job_id, "raw")       # uploaded video(s) live here
+    SAVE_DIR  = dir_for(job_id, "plots")     # segmentation PNGs go here
+    EXCEL_PATH = path_for(job_id, "segment_timestamps.xlsx")
 
     if not os.path.exists(VIDEO_DIR):
-        raise FileNotFoundError(f"⚠️ Could not find folder: {VIDEO_DIR}. Check your path spelling!")
+        raise FileNotFoundError(f"⚠️ Could not find folder: {VIDEO_DIR}. Was a video uploaded for this job?")
 
     all_files = os.listdir(VIDEO_DIR)
     video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
     video_paths = [f for f in all_files if f.lower().endswith(video_extensions)]
 
-    print(f"📦 Found {len(video_paths)} videos. Ingesting mass-processing engine...")
+    emit(f"📦 Found {len(video_paths)} videos. Ingesting mass-processing engine...", job_id=job_id)
 
     BINS = 64
 
@@ -81,7 +91,7 @@ def main():
     all_videos_data = {}  # In-memory dictionary to store processed time-series outputs
 
     for idx, v_name in enumerate(video_paths, 1):
-        print(f"🎬 [Processing {idx}/{len(video_paths)}] Extracting raw distance vectors for: {v_name}")
+        emit(f"🎬 [Processing {idx}/{len(video_paths)}] Extracting raw distance vectors for: {v_name}", job_id=job_id)
         v_path = os.path.join(VIDEO_DIR, v_name)
 
         result = extract_video_metrics(
@@ -89,11 +99,12 @@ def main():
             active_smoothing_method=ACTIVE_SMOOTHING_METHOD,
             savgol_window=SAVGOL_WINDOW,
             savgol_poly=SAVGOL_POLY,
-            bins=BINS
+            bins=BINS,
+            job_id=job_id  # threaded through so emit() inside knows which job's log to append to
         )
 
         if result is None:
-            print(f"⚠️ Skipping damaged/unopenable/too-short video file: {v_name}")
+            emit(f"⚠️ Skipping damaged/unopenable/too-short video file: {v_name}", job_id=job_id)
             continue
 
         timestamps, metrics_raw, metrics_filtered = result
@@ -114,9 +125,9 @@ def main():
         metrics_filtered = data["metrics_filtered"]
         video_base_name = os.path.splitext(v_name)[0]
 
-        print(f"\n==========================================================")
-        print(f"📋 REPORT SUMMARY FOR ASSET: {v_name}")
-        print(f"==========================================================")
+        emit(f"\n==========================================================", job_id=job_id)
+        emit(f"📋 REPORT SUMMARY FOR ASSET: {v_name}", job_id=job_id)
+        emit(f"==========================================================", job_id=job_id)
 
         for name, filtered_array in metrics_filtered.items():
             scaled_smoothed, scaled_raw, segments = scale_and_segment(
@@ -129,23 +140,26 @@ def main():
                 base_slope_cutoff=BASE_SLOPE_CUTOFF
             )
 
-            excel_rows = log_segments(v_name, name, segments, timestamps)
+            excel_rows = log_segments(v_name, name, segments, timestamps, job_id=job_id)
             excel_metadata_list.extend(excel_rows)
 
             out_file_name = f"final_segmented_{video_base_name}_{name.lower()}.png"
             render_segment_plot(
                 v_name, name, timestamps, scaled_raw, scaled_smoothed, segments,
                 color=metric_colors[name],
-                output_path=os.path.join(SAVE_DIR, out_file_name)
+                output_path=os.path.join(SAVE_DIR, out_file_name),
+                job_id=job_id
             )
 
     # ==============================================================================
     # ── SECTION 5: SMART NATIVE EXCEL APPENDING & DE-DUPLICATION ENGINE ───────────
     # ==============================================================================
-    save_segment_excel(excel_metadata_list, os.path.join(SAVE_DIR, "segment_timestamps.xlsx"))
+    save_segment_excel(excel_metadata_list, EXCEL_PATH, job_id=job_id)
 
-    print("\n🎉 Complete! Sorted everything into perfectly isolated segments.")
+    emit("\n🎉 Complete! Sorted everything into perfectly isolated segments.", job_id=job_id)
 
 
 if __name__ == "__main__":
-    main()
+    # Local manual test: drop a video into storage/jobs/local_test/raw/ first,
+    # then run this file directly to confirm the whole chain works end-to-end.
+    main(job_id="local_test")

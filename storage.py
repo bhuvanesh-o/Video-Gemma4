@@ -42,10 +42,32 @@ def path_for(job_id, *relative_parts):
         path_for(job_id, "segments", "video1", "segment_1.mp4")
         path_for(job_id, "raw", "input.mp4")
     """
+
+    '''
+    It only creates the parent folder of whatever path you build. That works fine for something 
+    like path_for(job_id, "raw", "input.mp4") — the parent (raw/) gets created, and input.mp4 itself 
+    is a file you're about to write, so that's correct.
+
+    But SAVE_DIR = path_for(job_id, "plots") is being used as a folder itself, 
+    not a file inside a folder. So os.path.dirname(full_path) here computes the dirname of 
+    .../local_test/plots, which is .../local_test — it creates the job folder, but never actually 
+    creates the plots folder itself. Then when render_segment_plot tries to save a PNG inside plots/, 
+    that folder doesn't exist yet → crash.
+
+    '''
     full_path = os.path.join(job_dir(job_id), *relative_parts)
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     return full_path
 
+
+def dir_for(job_id, *relative_parts):
+    """
+    Like path_for(), but for paths that are themselves folders (not files).
+    Creates the folder itself, not just its parent.
+    """
+    full_path = os.path.join(job_dir(job_id), *relative_parts)
+    os.makedirs(full_path, exist_ok=True)
+    return full_path
 
 def save_upload(job_id, file_obj, filename="input.mp4"):
     """

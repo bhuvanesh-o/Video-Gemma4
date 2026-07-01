@@ -14,6 +14,13 @@ Each function below corresponds to one of the original "long chunks":
   - log_segments             <- Section 4's console report + Excel row logging
   - render_segment_plot      <- Section 4's matplotlib rendering/visualization
   - save_segment_excel       <- Section 5's smart append/de-duplication engine
+
+REFACTOR NOTE: All print() calls have been replaced with emit() from progress.py
+so that progress can be streamed to a browser later via FastAPI SSE, while still
+printing locally when running from the command line. job_id=None is threaded
+through every function that emits — passing None keeps local CLI behavior identical.
+plt.show() is removed from render_segment_plot (a server has no display to pop a
+window on — plt.savefig() + plt.close() is the correct server-side equivalent).
 """
 
 import cv2
@@ -23,6 +30,8 @@ import os
 import scipy.spatial.distance as dist
 from scipy.signal import find_peaks, savgol_filter
 import pandas as pd
+
+from progress import emit
 
 
 # ==============================================================================
@@ -43,7 +52,7 @@ def compute_histogram(frame, bins=64):
 # ── extract_video_metrics ─────────────────────────────────────────────────────
 # ==============================================================================
 def extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay",
-                           savgol_window=7, savgol_poly=3, bins=64):
+                           savgol_window=7, savgol_poly=3, bins=64, job_id=None):
     """
     Per-video body of the old Section 3 loop:
       1. Opens the video and validates it (fps/isOpened guard).
@@ -62,6 +71,7 @@ def extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay",
     # Error handling guard: Verify video validity and confirm frame rates match standard capture parameters
     if not cap.isOpened() or fps == 0:
         cap.release()
+        emit(f"⚠️ Could not open video or invalid FPS: {video_path}", job_id=job_id)
         return None
 
     frames, timestamps = [], []
@@ -81,6 +91,7 @@ def extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay",
 
     n_frames = len(frames)
     if n_frames < 2:
+        emit(f"⚠️ Not enough frames to compare in: {video_path}", job_id=job_id)
         return None  # Not enough frames for comparative step math
 
     # Convert extracted image arrays into flattened structural probability histograms
@@ -147,6 +158,8 @@ def scale_and_segment(filtered_array, raw_array, noise_floor,
 
     Returns (scaled_smoothed, scaled_raw, segments) where segments is a list of dicts
     with 'start_idx', 'peak_idx', 'end_idx'.
+
+    No emit() calls in here — this is pure math, no status messages needed.
     """
     # Global Dataset Normalization: Scales the data between 0 and 1 using a noise ceiling safety guard
     local_max = np.max(filtered_array)
@@ -239,7 +252,7 @@ def scale_and_segment(filtered_array, raw_array, noise_floor,
 # ==============================================================================
 # ── log_segments ──────────────────────────────────────────────────────────────
 # ==============================================================================
-def log_segments(v_name, metric_name, segments, timestamps):
+def log_segments(v_name, metric_name, segments, timestamps, job_id=None):
     """
     Console report + Excel row logging for one video/metric's segments.
 
@@ -248,7 +261,7 @@ def log_segments(v_name, metric_name, segments, timestamps):
     but ONLY for the Cosine metric (matching the original's "log only Cosine to
     avoid duplicate rows" comment). Other metrics return an empty list.
     """
-    print(f"\n🔹 Distance Metric Model Integration: {metric_name}")
+    emit(f"\n🔹 Distance Metric Model Integration: {metric_name}", job_id=job_id)
 
     excel_rows = []
     for seg_idx, seg in enumerate(segments, 1):
@@ -257,7 +270,7 @@ def log_segments(v_name, metric_name, segments, timestamps):
         t_end = timestamps[seg['end_idx']]
 
         # Output pure structured timestamp data to the console for quick reference
-        print(f"  📍 Segment {seg_idx} Window Details -> Start: {t_start:.1f}s | Max Peak: {t_peak:.1f}s | Finish: {t_end:.1f}s")
+        emit(f"  📍 Segment {seg_idx} Window Details -> Start: {t_start:.1f}s | Max Peak: {t_peak:.1f}s | Finish: {t_end:.1f}s", job_id=job_id)
 
         # EXCEL TRACKING INJECTION: Log only the Cosine metrics to avoid creating duplicate rows,
         # as the downstream object detection pipeline tracks along your Cosine graph timelines.
@@ -276,11 +289,15 @@ def log_segments(v_name, metric_name, segments, timestamps):
 # ── render_segment_plot ───────────────────────────────────────────────────────
 # ==============================================================================
 def render_segment_plot(v_name, metric_name, timestamps, scaled_raw, scaled_smoothed,
-                         segments, color, output_path):
+                         segments, color, output_path, job_id=None):
     """
     Matplotlib RENDERING & VISUALIZATION LAYER from the original Section 4: draws the
     raw/smoothed traces, shades each segment window, marks rise/peak/fall lines, labels
-    everything, saves a high-res PNG to output_path, then shows the plot.
+    everything, and saves a high-res PNG to output_path.
+
+    NOTE: plt.show() removed — a server has no display to pop a window on, and leaving
+    it in would hang the background job indefinitely. plt.close(fig) is added to prevent
+    matplotlib memory buildup across many jobs running back-to-back.
     """
     fig, ax = plt.subplots(figsize=(20, 7))
 
@@ -328,22 +345,24 @@ def render_segment_plot(v_name, metric_name, timestamps, scaled_raw, scaled_smoo
     plt.suptitle(f"Strict Ordered Segment Report \nSource File: {v_name}", fontsize=12, weight='bold', y=0.98)
     plt.tight_layout()
 
-    # Save high-resolution PNG copies directly to the specified folder (locally, instead of Drive)
+    # Save high-resolution PNG copies directly to the specified job folder
     plt.savefig(output_path, dpi=150)
-    plt.show()  # Display the plot in a local matplotlib window (no notebook inline rendering on VS Code)
+    plt.close(fig)  # Close instead of show() — no display on a server; also avoids memory buildup across many jobs
+
+    emit(f"🖼️ Saved segmentation plot -> {output_path}", job_id=job_id)
 
 
 # ==============================================================================
 # ── save_segment_excel ────────────────────────────────────────────────────────
 # ==============================================================================
-def save_segment_excel(excel_metadata_list, excel_output_path):
+def save_segment_excel(excel_metadata_list, excel_output_path, job_id=None):
     """
     SMART NATIVE EXCEL APPENDING & DE-DUPLICATION ENGINE from the original Section 5.
     Merges today's fresh segment rows into any existing workbook, de-duplicating by
     (Source_Video, Segment_ID, Start_Time), and writes the result back out.
     """
     if len(excel_metadata_list) == 0:
-        print("\n⚠️ Notification: No valid timeline changes triggered data logs.")
+        emit("\n⚠️ Notification: No valid timeline changes triggered data logs.", job_id=job_id)
         return
 
     # Convert today's fresh runs into a structured DataFrame
@@ -351,7 +370,7 @@ def save_segment_excel(excel_metadata_list, excel_output_path):
 
     # Check for an existing database workbook file in the folder to merge new records safely
     if os.path.exists(excel_output_path):
-        print("\n📂 Found existing historical segment workbook. Merging new streams...")
+        emit("\n📂 Found existing historical segment workbook. Merging new streams...", job_id=job_id)
         try:
             # Read the historical data sheet
             df_historical = pd.read_excel(excel_output_path)
@@ -363,12 +382,12 @@ def save_segment_excel(excel_metadata_list, excel_output_path):
             df_combined = df_combined.drop_duplicates(subset=["Source_Video", "Segment_ID", "Start_Time"], keep="last")
             df_combined = df_combined.reset_index(drop=True)
         except Exception as e:
-            print(f"⚠️ Error reading old workbook file safely ({e}). Creating a fresh master block.")
+            emit(f"⚠️ Error reading old workbook file safely ({e}). Creating a fresh master block.", job_id=job_id)
             df_combined = df_new
     else:
-        print("\n🆕 No historical database found. Creating a fresh master segment workbook...")
+        emit("\n🆕 No historical database found. Creating a fresh master segment workbook...", job_id=job_id)
         df_combined = df_new
 
     # Write the cleaned data back to the binary Excel storage file
     df_combined.to_excel(excel_output_path, index=False)
-    print(f"✅ SUCCESS! Programmatically committed timeline maps to master workbook directly:\n➡️ {excel_output_path}")
+    emit(f"✅ SUCCESS! Programmatically committed timeline maps to master workbook directly:\n➡️ {excel_output_path}", job_id=job_id)

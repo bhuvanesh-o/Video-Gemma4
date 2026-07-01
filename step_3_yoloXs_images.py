@@ -18,8 +18,13 @@ calling into that library.
 The whole thing is wrapped in main() so this file can either be run directly
 (`python step_3_yoloXs_images.py`) or imported and called from a higher-level
 orchestrator script, e.g.:
-    import step_3_yoloXs_images.py
-    step_3_yoloXs_images.py.main()
+    import step_3_yoloXs_images
+    step_3_yoloXs_images.main(job_id="local_test")
+
+REFACTOR NOTE 2: Hardcoded D:\\Traffic_Control paths are replaced by storage.path_for()
+so every run is isolated to its own job folder. print() is replaced by emit() from
+progress.py so progress can be streamed to a browser later via FastAPI SSE while
+still printing locally when run from the command line.
 
 NOTE: Before running, in your terminal:
     pip install paddlepaddle paddleocr onnxruntime pandas openpyxl opencv-python numpy
@@ -30,10 +35,9 @@ missing — no manual `!wget` needed.
 NOTE: Fully local — no Google Drive, no Drive API, no OAuth. Excel hyperlinks
 point straight at local .jpg paths — click "View Truck"/"View Plate" to open.
 
-Make sure step_3_functions_yoloXs_images.py is in the same folder as this script (or
-somewhere on your PYTHONPATH) so the import below resolves.
+Make sure step_3_functions_yoloXs_images.py, storage.py, and progress.py are in the
+same folder as this script (or somewhere on your PYTHONPATH) so the imports below resolve.
 """
-
 import os
 import shutil
 import pandas as pd
@@ -46,22 +50,22 @@ from step_3_functions_yoloXs_images import (
     compile_segment_database,
     save_vehicle_registry,
 )
+from storage import path_for, dir_for
+from progress import emit
 
 
-def main():
+def main(job_id):
     # ==============================================================================
     # ── SECTION 1: MASTER TUNING PARAMETERS & PATHS CONFIGURATION ─────────────────
     # ==============================================================================
-
     # 💾 1A: ENVIRONMENT DIRECTORIES & TRACKING PATHS
     # ------------------------------------------------------------------------------
-    # 🔧 EDIT THESE to point at your local equivalents of the Drive folders
-    # (e.g. your local Google Drive Desktop sync mirror, or any plain local folder).
-    TIMESTAMPS_EXCEL = r"D:\Traffic_Control\segment_timestamps.xlsx"
-    SEGMENT_DIR      = r"D:\Traffic_Control\trial_video_segments"
-    ASSET_DIR        = r"D:\Traffic_Control\final_assets"
-    ONNX_PATH        = r"D:\Traffic_Control\yolox_small.onnx"
-    TEMP_DIR         = r"D:\Traffic_Control\temp"
+    # Replaces hardcoded D:\Traffic_Control paths — same job folder step 1/2 wrote to.
+    TIMESTAMPS_EXCEL = path_for(job_id, "segment_timestamps.xlsx")
+    SEGMENT_DIR      = dir_for(job_id, "trial_video_segments")
+    ASSET_DIR        = dir_for(job_id, "final_assets")
+    ONNX_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small.onnx")  # shared across jobs, not job-scoped — no need to re-download per job
+    TEMP_DIR         = dir_for(job_id, "temp")
 
     # 🧠 1B: DETECTOR INPUT CORE SETTINGS
     # ------------------------------------------------------------------------------
@@ -80,7 +84,6 @@ def main():
       - Pro: Highly aggressive; catches faint, blurry, or distant trucks early at the frame boundary.
       - Con: Risks letting large passenger vans or buses leak into your database log.
     """
-
     DETECTION_NMS_THR   = 0.6
     """
     What it does: Non-Maximum Suppression threshold to smash overlapping bounding boxes.
@@ -102,7 +105,6 @@ def main():
       - Pro: Highly precise local frame assignments; prevents ID inheritance swaps in fast heavy traffic lanes.
       - Con: Causes a clean track to split immediately into new duplicate rows if a truck passes behind a single tree branch.
     """
-
     TRACKER_DISTANCE_THR    = 200
     """
     What it does: Maximum pixel distance a vehicle's center can travel between frames to remain linked.
@@ -123,7 +125,6 @@ def main():
     If you DECREASE this value (e.g., to 0.8):
       - Enforces near-perfect temporal continuity; zero risk of mixing up sequential vehicles, but splits tracks if a vehicle stops completely.
     """
-
     MERGE_MAX_SPATIAL_GAP = 350
     """
     What it does: Maximum pixel translation gap between where Track A vanished and Track B initialized.
@@ -144,7 +145,6 @@ def main():
     If you DECREASE this value (e.g., to 2):
       - Logs everything, including brief edge-passing glimpses, but risks tracking false AI pixel flickers as real vehicles.
     """
-
     COLLISION_STD_GUARD     = 30.0
     """
     What it does: Bounding box standard deviation variance watcher across a rolling 3-frame average.
@@ -160,7 +160,6 @@ def main():
     # ==============================================================================
     # ── SYSTEM OVERHEAD SETUP ─────────────────────────────────────────────────────
     # ==============================================================================
-
     # Initialize target output sub-directories for structured storage safely
     os.makedirs(ASSET_DIR, exist_ok=True)
     os.makedirs(os.path.join(ASSET_DIR, "truck_crops"), exist_ok=True)
@@ -169,30 +168,27 @@ def main():
     os.makedirs(TEMP_DIR, exist_ok=True)
 
     YOLOX_WEIGHTS_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
-    ensure_yolox_weights(ONNX_PATH, YOLOX_WEIGHTS_URL)
+    ensure_yolox_weights(ONNX_PATH, YOLOX_WEIGHTS_URL, job_id=job_id)
 
     # ==============================================================================
     # ── SECTION 2: LOAD AI ENGINES INTO CPU ───────────────────────────────────────
     # ==============================================================================
-    print("🚀 Loading YOLOX-S (Apache 2.0)...")
+    emit("🚀 Loading YOLOX-S (Apache 2.0)...", job_id=job_id)
     ort_session, input_name = load_yolox_session(ONNX_PATH)
 
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
     # ==============================================================================
-
     # Load sheet containing macro temporal cuts generated during the video segmentation layer
     df_times = pd.read_excel(TIMESTAMPS_EXCEL)
     final_database = []
-
-    print(f"\n📦 Loaded Metadata for {len(df_times)} segments. Beginning precision extraction...")
+    emit(f"\n📦 Loaded Metadata for {len(df_times)} segments. Beginning precision extraction...", job_id=job_id)
 
     # Iterate through every temporal video slice segment sequentially
     for idx, row in df_times.iterrows():
         master_video_name = row["Source_Video"]
         seg_id = row["Segment_ID"]
         t_start = row["Start_Time"]
-
         segment_filename = f"segment_{seg_id}.mp4"
         video_base_name = os.path.splitext(master_video_name)[0]
         drive_video_path = os.path.join(SEGMENT_DIR, video_base_name, segment_filename)
@@ -200,7 +196,7 @@ def main():
         if not os.path.exists(drive_video_path):
             continue
 
-        print(f"\n🎬 Processing Segment {seg_id} (Absolute Anchor: {t_start}s)...")
+        emit(f"\n🎬 Processing Segment {seg_id} (Absolute Anchor: {t_start}s)...", job_id=job_id)
 
         # Isolate I/O bottlenecks by copying network files to the local scratch workspace
         local_video_path = os.path.join(TEMP_DIR, f"temp_in_{segment_filename}")
@@ -212,7 +208,8 @@ def main():
             ort_session, input_name, INPUT_SIZE, TRUCK_CLASS_ID,
             DETECTION_SCORE_THR, DETECTION_NMS_THR,
             TRACKER_MAX_DISAPPEARED, TRACKER_DISTANCE_THR,
-            COLLISION_STD_GUARD, PLATE_MARGIN_WIDTH_CLIP, PLATE_BOTTOM_HEIGHT_CLIP
+            COLLISION_STD_GUARD, PLATE_MARGIN_WIDTH_CLIP, PLATE_BOTTOM_HEIGHT_CLIP,
+            job_id=job_id
         )
 
         # Save finalized annotated video file back to the primary asset folder
@@ -224,17 +221,18 @@ def main():
         if os.path.exists(local_out_vid): os.remove(local_out_vid)
 
         active_state_buffer = merge_broken_tracks(active_state_buffer, MERGE_MAX_TIME_GAP, MERGE_MAX_SPATIAL_GAP)
-
         segment_rows = compile_segment_database(
-            active_state_buffer, seg_id, master_video_name, ASSET_DIR, MIN_VALID_FRAMES_LOGGED
+            active_state_buffer, seg_id, master_video_name, ASSET_DIR, MIN_VALID_FRAMES_LOGGED, job_id=job_id
         )
         final_database.extend(segment_rows)
 
     # ==============================================================================
     # ── SECTION 5: EXPORT CLEAN EXCEL TABLE ───────────────────────────────────────
     # ==============================================================================
-    save_vehicle_registry(final_database, ASSET_DIR)
+    save_vehicle_registry(final_database, ASSET_DIR, job_id=job_id)
 
 
 if __name__ == "__main__":
-    main()
+    # Local manual test: run step_1 and step_2 first (or manually populate the
+    # job folder equivalents), then run this file directly.
+    main(job_id="local_test")

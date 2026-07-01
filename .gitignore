@@ -32,6 +32,8 @@ LLM_Analysis_Report_Gemma4.txt
 temp/
 final_assets/
 trial_video_segments/
+storage/
+weights/
 
 # ── Secrets, if you ever add any back ────────────────────────────────────────
 .env
