@@ -64,22 +64,14 @@
             terminal.scrollTop = terminal.scrollHeight; // Auto-scroll to bottom
 
             // Check if the AI finished
-            if (event.data.includes("✅ DONE")) {
-                eventSource.close();
+            if (event.data.includes("DONE") || event.data.includes("ERROR")) {
+                eventSource.close(); 
                 uploadBtn.innerText = "Start Processing";
                 uploadBtn.disabled = false;
                 document.getElementById('downloadBtn').style.display = "block";
             }
         };
     }
-
-    // KILL SWITCH 2: If the server drops the connection for ANY reason, close it immediately.
-        eventSource.onerror = function() {
-            eventSource.close(); // <--- The ultimate safety net against infinite loops
-            uploadBtn.innerText = "Start Processing";
-            uploadBtn.disabled = false;
-            document.getElementById('downloadBtn').style.display = "block";
-        };
 
     function downloadExcel() {
         window.location.href = `/download/${currentJobId}`;

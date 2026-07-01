@@ -56,6 +56,8 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     return {"job_id": job_id}
 
 # 3. THE LIVE PROGRESS ENDPOINT (Server-Sent Events)
+
+'''
 @app.get("/stream/{job_id}")
 async def stream_logs(job_id: str):
     async def event_generator():
@@ -73,16 +75,48 @@ async def stream_logs(job_id: str):
                 last_index = len(logs)
             await asyncio.sleep(0.5) # Check for new logs every half-second
 
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        
         '''
+
+# app.py
+
+# 3. THE LIVE PROGRESS ENDPOINT (Server-Sent Events)
+@app.get("/stream/{job_id}")
+async def stream_logs(job_id: str):
+    async def event_generator():
+        # FAST-CHECK: Did the browser try to reconnect to an ALREADY FINISHED job?
+        full_history = progress.get_log(job_id)
+        if any("✅ DONE" in log or "❌ ERROR" in log for log in full_history):
+            # Send the final log immediately and shut down the generator
+            yield "data: ✅ DONE\n\n"
+            return
+
+        # NORMAL OPERATION: The job is still running. Stream live updates.
+        last_index = 0
+        while True:
+            logs = progress.get_log(job_id)
+            if len(logs) > last_index:
+                for log in logs[last_index:]:
+                    yield f"data: {log}\n\n"
+                    # If this specific line is the end flag, gracefully exit
+                    if "✅ DONE" in log or "❌ ERROR" in log:
+                        await asyncio.sleep(1) # Give UI a split-second to read it
+                        return 
+                last_index = len(logs)
+            await asyncio.sleep(0.5) 
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+'''
         # Keep the connection quietly alive for 10 seconds 
         # This gives the UI browser plenty of time to call eventSource.close()
         # and prevents the browser from triggering an automatic reconnect.
         for _ in range(20):
             await asyncio.sleep(0.5)
             
-        '''
+'''
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # 4. THE DOWNLOAD ENDPOINT
 @app.get("/download/{job_id}")
