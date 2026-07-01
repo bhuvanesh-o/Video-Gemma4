@@ -33,6 +33,9 @@ import os
 import numpy as np
 import pandas as pd
 
+import matplotlib
+matplotlib.use('Agg') # Forces matplotlib to run in pure file-saving headless mode
+
 from step_1_functions_segmentation import (
     extract_video_metrics,
     scale_and_segment,
