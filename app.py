@@ -3,11 +3,12 @@ import os
 import uuid
 import asyncio
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 
 # Import your existing, unmodified pipeline modules
 import storage
 import progress
+import video_preprocess
 import step_1_segmentation
 import step_2_video_slice_excel_timestamp
 import step_3_yoloXs_images
@@ -17,7 +18,7 @@ app = FastAPI()
 # 1. THE FRONTEND: Serve the HTML page when someone visits the site
 @app.get("/")
 async def serve_ui():
-    with open("index.html", "r") as f:
+    with open("index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
 # --- THE BACKGROUND WORKER ---
@@ -46,38 +47,30 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     # Generate a random 8-character ID for this user's session
     job_id = str(uuid.uuid4())[:8] 
     
+
     # Save the file safely using your storage abstraction!
-    storage.save_upload(job_id, file.file, filename=file.filename)
+    saved_path = storage.save_upload(job_id, file.file, filename=file.filename)
+
+    # ── VALIDATE + NORMALIZE BEFORE ANYTHING ELSE RUNS ────────────────────────
+    # 1) Reject videos longer than 1 minute outright — no point burning compute
+    #    on a job we're going to refuse.
+    # 2) If resolution is above 720p, downscale it in place. Every downstream
+    #    stage (step_1 plots, step_2 slices, step_3 YOLOX crops/annotated
+    #    segments) reads from this same raw/ file, so this one pass is enough
+    #    for the whole pipeline to operate in 720p. Videos already <= 720p are
+    #    left untouched — storage isn't a concern there.
+    try:
+        video_preprocess.validate_and_prepare(saved_path, job_id=job_id)
+    except ValueError as e:
+        storage.delete_job(job_id)  # clean up the rejected upload, nothing to keep around
+        return JSONResponse(status_code=400, content={"error": str(e)})
     
+
     # Tell FastAPI to run the pipeline in the background
     background_tasks.add_task(run_pipeline, job_id)
     
     # Instantly reply to the browser with the ID so it can start listening
     return {"job_id": job_id}
-
-# 3. THE LIVE PROGRESS ENDPOINT (Server-Sent Events)
-
-'''
-@app.get("/stream/{job_id}")
-async def stream_logs(job_id: str):
-    async def event_generator():
-        last_index = 0
-        finished = False
-        while not finished:
-            logs = progress.get_log(job_id)
-            # If there are new print statements in progress.py, send them!
-            if len(logs) > last_index:
-                for log in logs[last_index:]:
-                    yield f"data: {log}\n\n"
-                    # If we see the completion or error flag, close the stream
-                    if "✅ DONE" in log or "❌ ERROR" in log:
-                        finished = True
-                last_index = len(logs)
-            await asyncio.sleep(0.5) # Check for new logs every half-second
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-        
-        '''
 
 # app.py
 

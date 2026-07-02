@@ -39,3 +39,7 @@ weights/
 .env
 credentials.json
 token.pickle
+
+# for my rough
+rough.py
+rough.html

@@ -32,8 +32,18 @@ def emit(message, job_id=None):
     """
     print(message)
     if job_id is not None:
+        
+        #_job_logs.setdefault(job_id, []).append(f"[{timestamp}] {message}")
+
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        _job_logs.setdefault(job_id, []).append(f"[{timestamp}] {message}")
+        # NEW: collapse any embedded newlines (e.g. emit("\nFoo...")) into spaces.
+        # A raw "\n" inside an SSE "data:" payload breaks the browser's EventSource
+        # parser (only lines literally starting with "data:" are read as part of
+        # the event), so anything after the embedded newline was silently getting
+        # dropped in the UI even though it printed fine locally.
+        clean_message = message.replace("\n", " ").strip()
+        if clean_message:  # skip logging pure whitespace/newline-only messages
+            _job_logs.setdefault(job_id, []).append(f"[{timestamp}] {clean_message}")
 
 
 def get_log(job_id):

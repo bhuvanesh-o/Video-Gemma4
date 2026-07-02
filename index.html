@@ -16,7 +16,6 @@
     </style>
 </head>
 <body>
-
 <div class="container">
     <h2>AI Traffic Analysis Pipeline</h2>
     
@@ -24,37 +23,53 @@
         <input type="file" id="videoFile" accept="video/*">
         <button id="uploadBtn" onclick="uploadVideo()">Start Processing</button>
     </div>
-
     <div class="box">
         <h4>Live AI Progress Log:</h4>
         <div id="terminal">Awaiting video upload...</div>
         <button id="downloadBtn" onclick="downloadExcel()">Download Excel Results</button>
     </div>
 </div>
-
 <script>
     let currentJobId = "";
+
+    // NEW: When the user picks a new file, reset the button back to normal
+    // ("Start Processing", enabled) even if it was left as "Processed" from
+    // a prior run — this is the "process video should come back on" behavior.
+    document.getElementById('videoFile').addEventListener('change', function() {
+        const uploadBtn = document.getElementById('uploadBtn');
+        uploadBtn.innerText = "Start Processing";
+        uploadBtn.disabled = false;
+    });
 
     async function uploadVideo() {
         const fileInput = document.getElementById('videoFile');
         const uploadBtn = document.getElementById('uploadBtn');
         const terminal = document.getElementById('terminal');
-
         if (!fileInput.files[0]) return alert("Please select a video first!");
-
         // 1. Prepare UI
         uploadBtn.disabled = true;
         uploadBtn.innerText = "Processing...";
+        fileInput.disabled = true; // NEW: lock the file chooser too so a new video can't be picked mid-run
         terminal.innerHTML = "Uploading video...\n";
-
+        // NEW: Hide any leftover download button from a previous job — it points
+        // at the old job_id and would error out if clicked during/after this run.
+        document.getElementById('downloadBtn').style.display = "none";
         // 2. Send the file to FastAPI
         const formData = new FormData();
         formData.append("file", fileInput.files[0]);
-
         const response = await fetch('/upload', { method: 'POST', body: formData });
         const data = await response.json();
-        currentJobId = data.job_id;
 
+        // Handle rejection (e.g. video longer than 1 minute) before trying to stream
+        if (!response.ok || !data.job_id) {
+            terminal.innerHTML += `❌ ${data.error || "Upload rejected."}<br>`;
+            uploadBtn.innerText = "Start Processing";
+            uploadBtn.disabled = false;
+            fileInput.disabled = false; // NEW: unlock the file chooser since the run never started
+            return;
+        }
+
+        currentJobId = data.job_id;
         // 3. Connect to the Live Progress Stream (SSE)
         const eventSource = new EventSource(`/stream/${currentJobId}`);
         
@@ -62,21 +77,27 @@
             // Append new log lines to the terminal
             terminal.innerHTML += event.data + "<br>";
             terminal.scrollTop = terminal.scrollHeight; // Auto-scroll to bottom
-
             // Check if the AI finished
             if (event.data.includes("DONE") || event.data.includes("ERROR")) {
                 eventSource.close(); 
-                uploadBtn.innerText = "Start Processing";
-                uploadBtn.disabled = false;
-                document.getElementById('downloadBtn').style.display = "block";
+                // NEW: On success, mark the button "Processed" and keep it greyed
+                // out (stays that way until a new file is picked, see the file
+                // input listener above). On error, let them retry immediately.
+                if (event.data.includes("DONE")) {
+                    uploadBtn.innerText = "Processed";
+                    uploadBtn.disabled = true;
+                    document.getElementById('downloadBtn').style.display = "block";
+                } else {
+                    uploadBtn.innerText = "Start Processing";
+                    uploadBtn.disabled = false;
+                }
+                fileInput.disabled = false; // NEW: unlock the file chooser now that the run has ended
             }
         };
     }
-
     function downloadExcel() {
         window.location.href = `/download/${currentJobId}`;
     }
 </script>
-
 </body>
 </html>

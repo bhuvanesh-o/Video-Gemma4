@@ -361,11 +361,26 @@ def save_vehicle_registry(final_database, asset_dir, job_id=None):
     """
     if not final_database:
         emit("\n⚠️ Scan complete, but no valid trucks passed the confidence threshold.", job_id=job_id)
+
+        # NEW: still write an (empty, headers-only) registry instead of skipping the
+        # file entirely. Otherwise the pipeline reports ✅ DONE but /download 404s,
+        # since it was looking for a file that never got created — even though the
+        # run itself succeeded, it just found nothing to log.
+
+        empty_columns = ["Vehicle ID", "In Time", "Out Time", "Truck Type", "Tyres", "Plate File", "Truck File", "Source"]
+        df = pd.DataFrame(columns=empty_columns)
+        excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
+        df.to_excel(excel_path, index=False, engine='openpyxl')
+        emit(f"📄 Saved empty registry (no vehicles detected) to:\n{excel_path}", job_id=job_id)
         return
+    
     # Convert data structures into clear Pandas DataFrames, sorting by filename and timeline timestamps
     df = pd.DataFrame(final_database).sort_values(by=["Source", "In Time"]).reset_index(drop=True)
+
     # Define path destination mapping
     excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
+
     # Save using the openpyxl engine to ensure cell formulas remain fully executable inside spreadsheet software
     df.to_excel(excel_path, index=False, engine='openpyxl')
+    
     emit(f"\n🎉 EXCELLENT! Master Excel Sheet successfully saved to:\n{excel_path}", job_id=job_id)
