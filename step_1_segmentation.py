@@ -22,6 +22,9 @@ so every run is isolated to its own job folder. print() is replaced by emit() fr
 progress.py so progress can be streamed to a browser later via FastAPI SSE while
 still printing locally when run from the command line.
 
+REFACTOR NOTE 3 (structured events): every emit() call below now also passes
+stage="segmentation" and a short ui_message for the frontend's narrative UI.
+
 NOTE: Before running, install dependencies in your terminal:
     pip install opencv-python numpy matplotlib scipy pandas openpyxl
 
@@ -63,7 +66,8 @@ def main(job_id):
     video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
     video_paths = [f for f in all_files if f.lower().endswith(video_extensions)]
 
-    emit(f"📦 Found {len(video_paths)} videos. Ingesting mass-processing engine...", job_id=job_id)
+    emit(f"📦 Found {len(video_paths)} videos. Ingesting mass-processing engine...", job_id=job_id,
+         stage="segmentation", ui_message="Scanning your footage for scene changes...")
 
     BINS = 64
 
@@ -94,7 +98,8 @@ def main(job_id):
     all_videos_data = {}  # In-memory dictionary to store processed time-series outputs
 
     for idx, v_name in enumerate(video_paths, 1):
-        emit(f"🎬 [Processing {idx}/{len(video_paths)}] Extracting raw distance vectors for: {v_name}", job_id=job_id)
+        emit(f"🎬 [Processing {idx}/{len(video_paths)}] Extracting raw distance vectors for: {v_name}", job_id=job_id,
+             stage="segmentation", ui_message=f"Scanning {v_name} for scene changes ({idx}/{len(video_paths)})...")
         v_path = os.path.join(VIDEO_DIR, v_name)
 
         result = extract_video_metrics(
@@ -107,7 +112,8 @@ def main(job_id):
         )
 
         if result is None:
-            emit(f"⚠️ Skipping damaged/unopenable/too-short video file: {v_name}", job_id=job_id)
+            emit(f"⚠️ Skipping damaged/unopenable/too-short video file: {v_name}", job_id=job_id,
+                 stage="segmentation", ui_message=f"Skipping {v_name} — couldn't process it.")
             continue
 
         timestamps, metrics_raw, metrics_filtered = result
@@ -128,9 +134,12 @@ def main(job_id):
         metrics_filtered = data["metrics_filtered"]
         video_base_name = os.path.splitext(v_name)[0]
 
-        emit(f"\n==========================================================", job_id=job_id)
-        emit(f"📋 REPORT SUMMARY FOR ASSET: {v_name}", job_id=job_id)
-        emit(f"==========================================================", job_id=job_id)
+        emit(f"\n==========================================================", job_id=job_id,
+             stage="segmentation", ui_message="")  # separator — terminal only, nothing worth showing in the UI
+        emit(f"📋 REPORT SUMMARY FOR ASSET: {v_name}", job_id=job_id,
+             stage="segmentation", ui_message=f"Finished scanning {v_name}.")
+        emit(f"==========================================================", job_id=job_id,
+             stage="segmentation", ui_message="")  # separator — terminal only, nothing worth showing in the UI
 
         for name, filtered_array in metrics_filtered.items():
             scaled_smoothed, scaled_raw, segments = scale_and_segment(
@@ -159,7 +168,8 @@ def main(job_id):
     # ==============================================================================
     save_segment_excel(excel_metadata_list, EXCEL_PATH, job_id=job_id)
 
-    emit("\n🎉 Complete! Sorted everything into perfectly isolated segments.", job_id=job_id)
+    emit("\n🎉 Complete! Sorted everything into perfectly isolated segments.", job_id=job_id,
+         stage="segmentation", ui_message="Video segmentation complete.")
 
 
 if __name__ == "__main__":

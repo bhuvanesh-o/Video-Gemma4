@@ -9,8 +9,8 @@ later) and save the segments in a folder.
 
 REFACTOR NOTE: The long processing chunks (per-video Cosine extraction,
 peak/segment detection, slicing+Excel logging, Excel merge) now live in
-step_2_functions_video_slice_excel_timestamp.py as callable functions. This file just holds your
-config/tuning parameters and orchestrates the single processing loop by
+step_2_functions_video_slice_excel_timestamp.py as callable functions. This file just
+holds your config/tuning parameters and orchestrates the single processing loop by
 calling into that library.
 
 The whole thing is wrapped in main() so this file can either be run directly
@@ -23,6 +23,9 @@ REFACTOR NOTE 2: Hardcoded D:\\Traffic_Control paths are replaced by storage.pat
 so every run is isolated to its own job folder. print() is replaced by emit() from
 progress.py so progress can be streamed to a browser later via FastAPI SSE while
 still printing locally when run from the command line.
+
+REFACTOR NOTE 3 (structured events): every emit() call below now also passes
+stage="slicing" and a short ui_message for the frontend's narrative UI.
 
 NOTE: Before running, install dependencies in your terminal:
     pip install opencv-python numpy scipy pandas openpyxl
@@ -58,7 +61,8 @@ def main(job_id):
     all_files = os.listdir(MAIN_VIDEO_DIR)
     video_extensions = ('.mp4', '.avi', '.mov', '.mkv')
     video_paths = [f for f in all_files if f.lower().endswith(video_extensions)]
-    emit(f"📦 Found {len(video_paths)} videos. Starting Engine...", job_id=job_id)
+    emit(f"📦 Found {len(video_paths)} videos. Starting Engine...", job_id=job_id,
+         stage="slicing", ui_message="Preparing to cut your footage into clips...")
 
     # 2. HYPERPARAMETERS
     BINS = 64
@@ -78,7 +82,8 @@ def main(job_id):
     # ==============================================================================
     for idx, v_name in enumerate(video_paths, 1):
         v_path = os.path.join(MAIN_VIDEO_DIR, v_name)
-        emit(f"\n🎬 [Asset {idx}/{len(video_paths)}] Processing: {v_name}", job_id=job_id)
+        emit(f"\n🎬 [Asset {idx}/{len(video_paths)}] Processing: {v_name}", job_id=job_id,
+             stage="slicing", ui_message=f"Slicing {v_name} into clips...")
 
         result = extract_cosine_curve(v_path, savgol_window=SAVGOL_WINDOW, savgol_poly=SAVGOL_POLY, bins=BINS, job_id=job_id)
         if result is None:
@@ -95,7 +100,8 @@ def main(job_id):
         )
 
         if not segments:
-            emit("  📍 No significant transitions found. Skipping.", job_id=job_id)
+            emit("  📍 No significant transitions found. Skipping.", job_id=job_id,
+                 stage="slicing", ui_message=f"No transitions found in {v_name} — skipping.")
             continue
 
         excel_rows = slice_video_segments(v_path, v_name, segments, timestamps, fps, SEGMENT_DIR, job_id=job_id)
@@ -105,7 +111,8 @@ def main(job_id):
     # ── STEP 5: EXCEL SPREADSHEET CREATION (THE MAP FOR YOLOX) ────────────────────
     # ==============================================================================
     save_segment_excel(excel_metadata_list, EXCEL_PATH, job_id=job_id)
-    emit("🎉 PIPELINE RUN COMPLETE!", job_id=job_id)
+    emit("🎉 PIPELINE RUN COMPLETE!", job_id=job_id,
+         stage="slicing", ui_message="Video slicing complete.")
 
 
 if __name__ == "__main__":

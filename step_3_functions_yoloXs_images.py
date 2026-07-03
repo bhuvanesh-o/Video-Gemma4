@@ -18,6 +18,12 @@ REFACTOR NOTE: All print() calls have been replaced with emit() from progress.py
 so progress can be streamed to a browser later via FastAPI SSE, while still
 printing locally when running from the command line. job_id=None is threaded
 through every function that emits — passing None keeps local CLI behavior identical.
+
+REFACTOR NOTE 2 (structured events): every emit() call below now also passes
+stage="detection" and a short ui_message for the frontend's narrative UI.
+compile_segment_database's per-truck emit() also passes meta={"truck_found": True}
+so the frontend can keep a live running count of trucks found without having
+to parse the text.
 """
 import os
 import cv2
@@ -34,10 +40,12 @@ from progress import emit
 def ensure_yolox_weights(onnx_path, weights_url, job_id=None):
     """Auto-downloads the YOLOX-S ONNX weights once if they aren't already sitting at onnx_path."""
     if not os.path.exists(onnx_path):
-        emit("📥 YOLOX-S weights not found locally — downloading once from GitHub...", job_id=job_id)
+        emit("📥 YOLOX-S weights not found locally — downloading once from GitHub...", job_id=job_id,
+             stage="detection", ui_message="Setting up truck detection for the first time...")
         os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
         urllib.request.urlretrieve(weights_url, onnx_path)
-        emit(f"✅ Saved weights to {onnx_path}", job_id=job_id)
+        emit(f"✅ Saved weights to {onnx_path}", job_id=job_id,
+             stage="detection", ui_message="Detection model ready.")
 # ==============================================================================
 # ── load_yolox_session ─────────────────────────────────────────────────────────
 # ==============================================================================
@@ -349,7 +357,9 @@ def compile_segment_database(active_state_buffer, seg_id, master_video_name, ass
             "Truck File": truck_link,
             "Source": master_video_name
         })
-        emit(f"      ✅ Logged -> ID: {voted_id.upper()} | Type: {truck_type} | True Absolute Time: {profile['in_time']:.1f}s - {profile['out_time']:.1f}s", job_id=job_id)
+        emit(f"      ✅ Logged -> ID: {voted_id.upper()} | Type: {truck_type} | True Absolute Time: {profile['in_time']:.1f}s - {profile['out_time']:.1f}s", job_id=job_id,
+             stage="detection", ui_message=f"Found a {truck_type.lower()} — added to your registry.",
+             meta={"truck_found": True})
     return rows
 # ==============================================================================
 # ── save_vehicle_registry ──────────────────────────────────────────────────────
@@ -360,27 +370,24 @@ def save_vehicle_registry(final_database, asset_dir, job_id=None):
     sorted by Source video and In Time.
     """
     if not final_database:
-        emit("\n⚠️ Scan complete, but no valid trucks passed the confidence threshold.", job_id=job_id)
-
+        emit("\n⚠️ Scan complete, but no valid trucks passed the confidence threshold.", job_id=job_id,
+             stage="detection", ui_message="No trucks were detected in this footage.")
         # NEW: still write an (empty, headers-only) registry instead of skipping the
-        # file entirely. Otherwise the pipeline reports ✅ DONE but /download 404s,
+        # file entirely. Otherwise the pipeline reports DONE but /download 404s,
         # since it was looking for a file that never got created — even though the
         # run itself succeeded, it just found nothing to log.
-
         empty_columns = ["Vehicle ID", "In Time", "Out Time", "Truck Type", "Tyres", "Plate File", "Truck File", "Source"]
         df = pd.DataFrame(columns=empty_columns)
         excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
         df.to_excel(excel_path, index=False, engine='openpyxl')
-        emit(f"📄 Saved empty registry (no vehicles detected) to:\n{excel_path}", job_id=job_id)
+        emit(f"📄 Saved empty registry (no vehicles detected) to:\n{excel_path}", job_id=job_id,
+             stage="detection", ui_message="")  # already said "no trucks" above — nothing new for the UI
         return
-    
     # Convert data structures into clear Pandas DataFrames, sorting by filename and timeline timestamps
     df = pd.DataFrame(final_database).sort_values(by=["Source", "In Time"]).reset_index(drop=True)
-
     # Define path destination mapping
     excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
-
     # Save using the openpyxl engine to ensure cell formulas remain fully executable inside spreadsheet software
     df.to_excel(excel_path, index=False, engine='openpyxl')
-    
-    emit(f"\n🎉 EXCELLENT! Master Excel Sheet successfully saved to:\n{excel_path}", job_id=job_id)
+    emit(f"\n🎉 EXCELLENT! Master Excel Sheet successfully saved to:\n{excel_path}", job_id=job_id,
+         stage="detection", ui_message="Your vehicle registry is ready.")

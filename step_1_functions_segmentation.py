@@ -11,7 +11,7 @@ Each function below corresponds to one of the original "long chunks":
                                  histogram distances, smoothing)
   - scale_and_segment        <- Section 4's normalization + peak-finding +
                                  saddle-point segment splitting
-  - log_segments             <- Section 4's console report + Excel row logging
+  - log_segments              <- Section 4's console report + Excel row logging
   - render_segment_plot      <- Section 4's matplotlib rendering/visualization
   - save_segment_excel       <- Section 5's smart append/de-duplication engine
 
@@ -21,6 +21,11 @@ printing locally when running from the command line. job_id=None is threaded
 through every function that emits — passing None keeps local CLI behavior identical.
 plt.show() is removed from render_segment_plot (a server has no display to pop a
 window on — plt.savefig() + plt.close() is the correct server-side equivalent).
+
+REFACTOR NOTE 2 (structured events): every emit() call below now also passes
+stage="segmentation" and a short, plain-language ui_message — this is what
+lets the frontend render a clean narrative ("Scanning for scene changes...")
+instead of the verbose terminal text. The terminal output itself is unchanged.
 """
 
 import cv2
@@ -71,7 +76,8 @@ def extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay",
     # Error handling guard: Verify video validity and confirm frame rates match standard capture parameters
     if not cap.isOpened() or fps == 0:
         cap.release()
-        emit(f"⚠️ Could not open video or invalid FPS: {video_path}", job_id=job_id)
+        emit(f"⚠️ Could not open video or invalid FPS: {video_path}", job_id=job_id,
+             stage="segmentation", ui_message="Skipping a clip that couldn't be opened.")
         return None
 
     frames, timestamps = [], []
@@ -91,7 +97,8 @@ def extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay",
 
     n_frames = len(frames)
     if n_frames < 2:
-        emit(f"⚠️ Not enough frames to compare in: {video_path}", job_id=job_id)
+        emit(f"⚠️ Not enough frames to compare in: {video_path}", job_id=job_id,
+             stage="segmentation", ui_message="Skipping a clip that's too short to analyze.")
         return None  # Not enough frames for comparative step math
 
     # Convert extracted image arrays into flattened structural probability histograms
@@ -261,7 +268,8 @@ def log_segments(v_name, metric_name, segments, timestamps, job_id=None):
     but ONLY for the Cosine metric (matching the original's "log only Cosine to
     avoid duplicate rows" comment). Other metrics return an empty list.
     """
-    emit(f"\n🔹 Distance Metric Model Integration: {metric_name}", job_id=job_id)
+    emit(f"\n🔹 Distance Metric Model Integration: {metric_name}", job_id=job_id,
+         stage="segmentation", ui_message=f"Analyzing motion using the {metric_name} method...")
 
     excel_rows = []
     for seg_idx, seg in enumerate(segments, 1):
@@ -270,7 +278,8 @@ def log_segments(v_name, metric_name, segments, timestamps, job_id=None):
         t_end = timestamps[seg['end_idx']]
 
         # Output pure structured timestamp data to the console for quick reference
-        emit(f"  📍 Segment {seg_idx} Window Details -> Start: {t_start:.1f}s | Max Peak: {t_peak:.1f}s | Finish: {t_end:.1f}s", job_id=job_id)
+        emit(f"  📍 Segment {seg_idx} Window Details -> Start: {t_start:.1f}s | Max Peak: {t_peak:.1f}s | Finish: {t_end:.1f}s", job_id=job_id,
+             stage="segmentation", ui_message=f"Found activity between {t_start:.0f}s and {t_end:.0f}s.")
 
         # EXCEL TRACKING INJECTION: Log only the Cosine metrics to avoid creating duplicate rows,
         # as the downstream object detection pipeline tracks along your Cosine graph timelines.
@@ -349,7 +358,8 @@ def render_segment_plot(v_name, metric_name, timestamps, scaled_raw, scaled_smoo
     plt.savefig(output_path, dpi=150)
     plt.close(fig)  # Close instead of show() — no display on a server; also avoids memory buildup across many jobs
 
-    emit(f"🖼️ Saved segmentation plot -> {output_path}", job_id=job_id)
+    emit(f"🖼️ Saved segmentation plot -> {output_path}", job_id=job_id,
+         stage="segmentation", ui_message="Saved a visual map of the detected activity.")
 
 
 # ==============================================================================
@@ -362,7 +372,8 @@ def save_segment_excel(excel_metadata_list, excel_output_path, job_id=None):
     (Source_Video, Segment_ID, Start_Time), and writes the result back out.
     """
     if len(excel_metadata_list) == 0:
-        emit("\n⚠️ Notification: No valid timeline changes triggered data logs.", job_id=job_id)
+        emit("\n⚠️ Notification: No valid timeline changes triggered data logs.", job_id=job_id,
+             stage="segmentation", ui_message="No significant activity detected in this footage.")
         return
 
     # Convert today's fresh runs into a structured DataFrame
@@ -370,7 +381,8 @@ def save_segment_excel(excel_metadata_list, excel_output_path, job_id=None):
 
     # Check for an existing database workbook file in the folder to merge new records safely
     if os.path.exists(excel_output_path):
-        emit("\n📂 Found existing historical segment workbook. Merging new streams...", job_id=job_id)
+        emit("\n📂 Found existing historical segment workbook. Merging new streams...", job_id=job_id,
+             stage="segmentation", ui_message="Merging with your previous results...")
         try:
             # Read the historical data sheet
             df_historical = pd.read_excel(excel_output_path)
@@ -382,12 +394,15 @@ def save_segment_excel(excel_metadata_list, excel_output_path, job_id=None):
             df_combined = df_combined.drop_duplicates(subset=["Source_Video", "Segment_ID", "Start_Time"], keep="last")
             df_combined = df_combined.reset_index(drop=True)
         except Exception as e:
-            emit(f"⚠️ Error reading old workbook file safely ({e}). Creating a fresh master block.", job_id=job_id)
+            emit(f"⚠️ Error reading old workbook file safely ({e}). Creating a fresh master block.", job_id=job_id,
+                 stage="segmentation", ui_message="Starting a fresh timestamp log.")
             df_combined = df_new
     else:
-        emit("\n🆕 No historical database found. Creating a fresh master segment workbook...", job_id=job_id)
+        emit("\n🆕 No historical database found. Creating a fresh master segment workbook...", job_id=job_id,
+             stage="segmentation", ui_message="Creating your segment timeline...")
         df_combined = df_new
 
     # Write the cleaned data back to the binary Excel storage file
     df_combined.to_excel(excel_output_path, index=False)
-    emit(f"✅ SUCCESS! Programmatically committed timeline maps to master workbook directly:\n➡️ {excel_output_path}", job_id=job_id)
+    emit(f"✅ SUCCESS! Programmatically committed timeline maps to master workbook directly:\n➡️ {excel_output_path}", job_id=job_id,
+         stage="segmentation", ui_message="Segment timeline saved.")

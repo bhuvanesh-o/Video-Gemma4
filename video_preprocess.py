@@ -80,7 +80,8 @@ def _downscale_to_720p(video_path, info, job_id=None):
     if new_height % 2 == 1:
         new_height -= 1
 
-    emit(f"📉 Source video is {src_width}x{src_height} — downscaling to {new_width}x{new_height} (720p cap) before processing...", job_id=job_id)
+    emit(f"📉 Source video is {src_width}x{src_height} — downscaling to {new_width}x{new_height} (720p cap) before processing...", job_id=job_id,
+         stage="preparing", ui_message="Optimizing your footage for processing...")
 
     tmp_path = video_path + ".downscaled_tmp.mp4"
     cap = cv2.VideoCapture(video_path)
@@ -99,7 +100,8 @@ def _downscale_to_720p(video_path, info, job_id=None):
 
     # Atomically swap the downscaled file in as the new raw upload
     os.replace(tmp_path, video_path)
-    emit(f"✅ Downscale complete — all downstream steps (segments, slices, YOLOX crops) will now use {new_width}x{new_height}.", job_id=job_id)
+    emit(f"✅ Downscale complete — all downstream steps (segments, slices, YOLOX crops) will now use {new_width}x{new_height}.", job_id=job_id,
+         stage="preparing", ui_message="Footage ready — starting analysis...")
 
 
 def validate_and_prepare(video_path, job_id=None):
@@ -134,6 +136,7 @@ def validate_and_prepare(video_path, job_id=None):
         _downscale_to_720p(video_path, info, job_id=job_id)
         info = get_video_info(video_path)  # re-read post-downscale dimensions
     else:
-        emit(f"✅ Video resolution is {info['width']}x{info['height']} (already 720p) — no downscale needed.", job_id=job_id)
+        emit(f"✅ Video resolution is {info['width']}x{info['height']} (already 720p) — no downscale needed.", job_id=job_id,
+             stage="preparing", ui_message="Footage ready — starting analysis...")
 
     return info

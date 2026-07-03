@@ -14,6 +14,9 @@ REFACTOR NOTE: All print() calls have been replaced with emit() from progress.py
 so progress can be streamed to a browser later via FastAPI SSE, while still
 printing locally when running from the command line. job_id=None is threaded
 through every function that emits — passing None keeps local CLI behavior identical.
+
+REFACTOR NOTE 2 (structured events): every emit() call below now also passes
+stage="slicing" and a short ui_message for the frontend's narrative UI.
 """
 import cv2
 import numpy as np
@@ -47,7 +50,8 @@ def extract_cosine_curve(video_path, savgol_window=7, savgol_poly=3, bins=64, jo
     # Skip videos that fail to open or report a 0 FPS (corrupt/unreadable files)
     if not cap.isOpened() or fps == 0:
         cap.release()
-        emit(f"⚠️ Could not open video or invalid FPS: {video_path}", job_id=job_id)
+        emit(f"⚠️ Could not open video or invalid FPS: {video_path}", job_id=job_id,
+             stage="slicing", ui_message="Skipping a clip that couldn't be opened.")
         return None
     frames, timestamps = [], []
     frame_idx = 0
@@ -63,7 +67,8 @@ def extract_cosine_curve(video_path, savgol_window=7, savgol_poly=3, bins=64, jo
     cap.release()
     n_frames = len(frames)
     if n_frames < 2:
-        emit(f"⚠️ Not enough frames to compare in: {video_path}", job_id=job_id)
+        emit(f"⚠️ Not enough frames to compare in: {video_path}", job_id=job_id,
+             stage="slicing", ui_message="Skipping a clip that's too short to slice.")
         return None  # Not enough frames to compute frame-to-frame change
     # Build per-second histograms, then measure cosine distance between consecutive frames
     histograms_norm = [compute_histogram(f, bins) for f in frames]
@@ -186,7 +191,8 @@ def slice_video_segments(v_path, v_name, segments, timestamps, fps, segment_dir,
         t_end = timestamps[seg['end_idx']]
         segment_clip_name = f"segment_{seg_idx}.mp4"
         segment_clip_path = os.path.join(video_output_dir, segment_clip_name)
-        emit(f"    ✂️ Slicing -> {segment_clip_name} ({t_start:.1f}s to {t_end:.1f}s)...", job_id=job_id)
+        emit(f"    ✂️ Slicing -> {segment_clip_name} ({t_start:.1f}s to {t_end:.1f}s)...", job_id=job_id,
+             stage="slicing", ui_message=f"Cutting clip {seg_idx} ({t_start:.0f}s to {t_end:.0f}s)...")
         slice_physical_mp4(v_path, t_start, t_end, segment_clip_path, fps)
         # 🌟 CRITICAL: Saving the data to the memory list for Excel
         excel_rows.append({
@@ -205,7 +211,8 @@ def save_segment_excel(excel_metadata_list, excel_path, job_id=None):
     re-scanned segments by (Source_Video, Segment_ID, Start_Time), and saves it.
     """
     if len(excel_metadata_list) == 0:
-        emit("\n⚠️ No movement detected across any videos. Excel sheet was not created.", job_id=job_id)
+        emit("\n⚠️ No movement detected across any videos. Excel sheet was not created.", job_id=job_id,
+             stage="slicing", ui_message="No clips to cut — nothing significant was detected.")
         return
     df_new = pd.DataFrame(excel_metadata_list)
     # Merge with any pre-existing workbook, de-duplicating re-scanned segments
@@ -219,4 +226,5 @@ def save_segment_excel(excel_metadata_list, excel_path, job_id=None):
     else:
         df_combined = df_new
     df_combined.to_excel(excel_path, index=False)
-    emit(f"\n✅ SUCCESS! Master timeline saved to:\n➡️ {excel_path}", job_id=job_id)
+    emit(f"\n✅ SUCCESS! Master timeline saved to:\n➡️ {excel_path}", job_id=job_id,
+         stage="slicing", ui_message="Segment timestamps logged to your registry.")

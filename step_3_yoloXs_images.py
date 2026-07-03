@@ -26,6 +26,9 @@ so every run is isolated to its own job folder. print() is replaced by emit() fr
 progress.py so progress can be streamed to a browser later via FastAPI SSE while
 still printing locally when run from the command line.
 
+REFACTOR NOTE 3 (structured events): every emit() call below now also passes
+stage="detection" and a short ui_message for the frontend's narrative UI.
+
 NOTE: Before running, in your terminal:
     pip install paddlepaddle paddleocr onnxruntime pandas openpyxl opencv-python numpy
 
@@ -173,7 +176,8 @@ def main(job_id):
     # ==============================================================================
     # ── SECTION 2: LOAD AI ENGINES INTO CPU ───────────────────────────────────────
     # ==============================================================================
-    emit("🚀 Loading YOLOX-S (Apache 2.0)...", job_id=job_id)
+    emit("🚀 Loading YOLOX-S (Apache 2.0)...", job_id=job_id,
+         stage="detection", ui_message="Loading the truck detection model...")
     ort_session, input_name = load_yolox_session(ONNX_PATH)
 
     # ==============================================================================
@@ -182,7 +186,8 @@ def main(job_id):
     # Load sheet containing macro temporal cuts generated during the video segmentation layer
     df_times = pd.read_excel(TIMESTAMPS_EXCEL)
     final_database = []
-    emit(f"\n📦 Loaded Metadata for {len(df_times)} segments. Beginning precision extraction...", job_id=job_id)
+    emit(f"\n📦 Loaded Metadata for {len(df_times)} segments. Beginning precision extraction...", job_id=job_id,
+         stage="detection", ui_message=f"Scanning {len(df_times)} clips for trucks...")
 
     # Iterate through every temporal video slice segment sequentially
     for idx, row in df_times.iterrows():
@@ -196,7 +201,8 @@ def main(job_id):
         if not os.path.exists(drive_video_path):
             continue
 
-        emit(f"\n🎬 Processing Segment {seg_id} (Absolute Anchor: {t_start}s)...", job_id=job_id)
+        emit(f"\n🎬 Processing Segment {seg_id} (Absolute Anchor: {t_start}s)...", job_id=job_id,
+             stage="detection", ui_message=f"Looking for trucks in clip {seg_id}...")
 
         # Isolate I/O bottlenecks by copying network files to the local scratch workspace
         local_video_path = os.path.join(TEMP_DIR, f"temp_in_{segment_filename}")
