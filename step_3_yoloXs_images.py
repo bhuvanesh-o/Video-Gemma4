@@ -176,9 +176,10 @@ def main(job_id):
     # ==============================================================================
     # ── SECTION 2: LOAD AI ENGINES INTO CPU ───────────────────────────────────────
     # ==============================================================================
-    emit("🚀 Loading YOLOX-S (Apache 2.0)...", job_id=job_id,
-         stage="detection", ui_message="Loading the truck detection model...")
-    ort_session, input_name = load_yolox_session(ONNX_PATH)
+    # Section 2: LOAD AI ENGINES INTO CPU
+    emit("🚀 Loading YOLOX-S via OpenVINO (CPU)...", job_id=job_id,
+        stage="detection", ui_message="Loading the truck detection model...")
+    infer_request, input_layer, output_layer = load_yolox_session(ONNX_PATH, job_id=job_id)
 
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
@@ -209,14 +210,17 @@ def main(job_id):
         local_out_vid = os.path.join(TEMP_DIR, f"temp_out_{segment_filename}")
         shutil.copy(drive_video_path, local_video_path)
 
+        # inside the per-segment "for idx, row in df_times.iterrows():" loop, replace the
+        # run_detection_tracking(...) call with:
+        
         active_state_buffer = run_detection_tracking(
             local_video_path, local_out_vid, t_start,
-            ort_session, input_name, INPUT_SIZE, TRUCK_CLASS_ID,
+            infer_request, input_layer, output_layer, INPUT_SIZE, TRUCK_CLASS_ID,
             DETECTION_SCORE_THR, DETECTION_NMS_THR,
             TRACKER_MAX_DISAPPEARED, TRACKER_DISTANCE_THR,
             COLLISION_STD_GUARD, PLATE_MARGIN_WIDTH_CLIP, PLATE_BOTTOM_HEIGHT_CLIP,
             job_id=job_id
-        )
+)
 
         # Save finalized annotated video file back to the primary asset folder
         final_video_dest = os.path.join(ASSET_DIR, "annotated_segments", f"annotated_{segment_filename}")

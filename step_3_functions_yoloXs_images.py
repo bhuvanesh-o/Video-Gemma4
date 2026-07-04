@@ -214,55 +214,55 @@ class LightweightTracker:
 # ==============================================================================
 # ── run_detection_tracking ─────────────────────────────────────────────────────
 # ==============================================================================
-def run_detection_tracking(local_video_path, local_out_vid, t_start, ort_session, input_name,
+def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_request, input_layer, output_layer,
                             input_size, truck_class_id, detection_score_thr, detection_nms_thr,
                             tracker_max_disappeared, tracker_distance_thr, collision_std_guard,
                             plate_margin_width_clip, plate_bottom_height_clip, job_id=None):
     """
-    Per-segment frame-by-frame detect+track loop (the body of Section 4's
-    "Sequential frame-by-frame computational decoding loop"). Runs YOLOX inference
-    on every frame, updates the LightweightTracker, builds/updates each truck's
-    profile (in/out time, hero-frame crops, aspect ratios), draws annotations onto
-    the frame, and writes the annotated video out to local_out_vid.
-    Returns active_state_buffer: dict of {track_id: profile_dict}.
+    (docstring unchanged from your original — same per-segment detect+track loop)
     """
-    # Initialize video capture stream components
     cap = cv2.VideoCapture(local_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_center_x, frame_center_y = w / 2, h / 2
-    # Instantiate video writer to store annotated visual debugging elements
     out_writer = cv2.VideoWriter(local_out_vid, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
     tracker = LightweightTracker(max_disappeared=tracker_max_disappeared, distance_threshold=tracker_distance_thr)
     active_state_buffer = {}
     frame_count = 0
-    # Sequential frame-by-frame computational decoding loop
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
-        # Calculate exact absolute timeline position relative to the root source asset
+
         current_absolute_time = t_start + (frame_count / fps)
-        # Ingest processed arrays into the inference engine
         img, ratio = preprocess(frame, input_size)
-        raw_out = ort_session.run(None, {input_name: img[None, :, :, :]})[0]
+
+        # OpenVINO swap: was
+        #   raw_out = ort_session.run(None, {input_name: img[None, :, :, :]})[0]
+        # infer_request is reused across every frame — created once in load_yolox_session.
+        infer_request.infer({input_layer: img[None, :, :, :]})
+        # .copy() matters here: the tensor's .data is a view into a buffer that OpenVINO
+        # reuses on the NEXT infer() call. decode_outputs() below mutates this array in
+        # place, and without a copy, that mutation could corrupt shared buffer state that
+        # the next frame's infer() call reads from.
+        raw_out = infer_request.get_output_tensor(output_layer.index).data.copy()
+
         decoded = decode_outputs(raw_out, input_size)[0]
-        # Filter and track valid truck objects
+
         truck_boxes = get_truck_boxes(decoded, ratio, w, h, score_thr=detection_score_thr,
                                        nms_thr=detection_nms_thr, truck_class_id=truck_class_id)
         tracked_trucks = tracker.update(truck_boxes)
-        # Process each vehicle currently managed by the active tracking system
+
         for track_id, box in tracked_trucks.items():
             x1, y1, x2, y2 = box
             width = x2 - x1
             height = y2 - y1
             aspect_ratio = width / max(height, 1)
             box_center_x, box_center_y = (x1 + x2) / 2, (y1 + y2) / 2
-            # Superimpose layout metadata on the rendering canvas
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f"TRUCK ID: {track_id}", (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            # Initialize profile records for unlogged vehicle tracks
             if track_id not in active_state_buffer:
                 active_state_buffer[track_id] = {
                     "in_time": current_absolute_time, "out_time": current_absolute_time,
@@ -274,25 +274,24 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, ort_session
             profile["out_time"] = current_absolute_time
             profile["frames_tracked"] += 1
             profile["last_box"] = [x1, y1, x2, y2]
-            # Rolling Box Dynamics Guard: Freeze data collection if dimensions fluctuate wildly
             profile["widths"].append(width)
             recent_widths = profile["widths"][-3:]
             is_collision = len(recent_widths) == 3 and np.std(recent_widths) > collision_std_guard
             if not is_collision:
                 profile["aspect_ratios"].append(aspect_ratio)
-            # Center Proximity "Hero Frame" Core Engine: Extract crops when closest to the optical axis
             dist_to_center = math.hypot(frame_center_x - box_center_x, frame_center_y - box_center_y)
             if dist_to_center < profile["best_center_dist"]:
                 profile["best_center_dist"] = dist_to_center
                 profile["best_truck_img"] = frame[y1:y2, x1:x2].copy()
-                # Dynamic Localized Plate Clipper (Extracts plate bounding region based on geometric heuristics)
                 px1 = int(x1 + (width * plate_margin_width_clip))
                 px2 = int(x2 - (width * plate_margin_width_clip))
                 py1 = int(y2 - (height * plate_bottom_height_clip))
                 py2 = int(y2)
                 profile["best_plate_img"] = frame[max(0, py1):min(h, py2), max(0, px1):min(w, px2)].copy()
+
         out_writer.write(frame)
         frame_count += 1
+
     cap.release()
     out_writer.release()
     return active_state_buffer
