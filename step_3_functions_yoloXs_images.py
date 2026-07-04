@@ -31,7 +31,8 @@ import numpy as np
 import pandas as pd
 import math
 import urllib.request
-import onnxruntime as ort
+# import onnxruntime as ort
+import openvino as ov          # was: import onnxruntime as ort
 
 from progress import emit
 # ==============================================================================
@@ -49,11 +50,35 @@ def ensure_yolox_weights(onnx_path, weights_url, job_id=None):
 # ==============================================================================
 # ── load_yolox_session ─────────────────────────────────────────────────────────
 # ==============================================================================
-def load_yolox_session(onnx_path):
-    """Initializes the ONNX Runtime CPU inference session and returns (session, input_name)."""
-    ort_session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
-    input_name = ort_session.get_inputs()[0].name
-    return ort_session, input_name
+def load_yolox_session(onnx_path, job_id=None):
+    """
+    Initializes an OpenVINO CPU inference session from the YOLOX-S ONNX weights.
+
+    Returns (infer_request, input_layer, output_layer) — NOT a session+name pair
+    like onnxruntime. infer_request is created ONCE here and must be reused
+    across every frame in run_detection_tracking (see below), not recreated
+    per call — that's what preserves OpenVINO's compiled-graph optimizations.
+    """
+    core = ov.Core()
+
+    ir_path = os.path.splitext(onnx_path)[0] + ".xml"  # cached IR sits next to the .onnx
+
+    if os.path.exists(ir_path):
+        emit("⚡ Loading cached OpenVINO IR (skips ONNX conversion)...", job_id=job_id,
+             stage="detection", ui_message="Loading detection model...")
+        model = core.read_model(ir_path)
+    else:
+        emit("🔄 First run — converting YOLOX-S ONNX to OpenVINO IR (one-time cost)...", job_id=job_id,
+             stage="detection", ui_message="Preparing detection model for the first time...")
+        model = core.read_model(onnx_path)
+        ov.save_model(model, ir_path)  # cache it — every future job loads the .xml branch above instead
+
+    compiled_model = core.compile_model(model, "CPU")
+    input_layer = compiled_model.input(0)
+    output_layer = compiled_model.output(0)
+    infer_request = compiled_model.create_infer_request()
+
+    return infer_request, input_layer, output_layer
 # ==============================================================================
 # ── preprocess ─────────────────────────────────────────────────────────────────
 # ==============================================================================
