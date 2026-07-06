@@ -50,28 +50,39 @@ def ensure_yolox_weights(onnx_path, weights_url, job_id=None):
 # ==============================================================================
 # ── load_yolox_session ─────────────────────────────────────────────────────────
 # ==============================================================================
-def load_yolox_session(onnx_path, job_id=None):
+def load_yolox_session(model_path, job_id=None):
     """
-    Initializes an OpenVINO CPU inference session from the YOLOX-S ONNX weights.
+    Initializes an OpenVINO CPU inference session from a model file.
 
-    Returns (infer_request, input_layer, output_layer) — NOT a session+name pair
-    like onnxruntime. infer_request is created ONCE here and must be reused
-    across every frame in run_detection_tracking (see below), not recreated
-    per call — that's what preserves OpenVINO's compiled-graph optimizations.
+    model_path can be:
+      - a .xml IR file (FP32 OR INT8) -> loaded directly, no conversion needed
+      - a .onnx file -> converted once to FP32 IR (cached next to it), then loaded
+
+    Returns (infer_request, input_layer, output_layer). infer_request is
+    created ONCE here and reused across every frame in run_detection_tracking —
+    do not recreate it per frame.
     """
     core = ov.Core()
+    ext = os.path.splitext(model_path)[1].lower()
 
-    ir_path = os.path.splitext(onnx_path)[0] + ".xml"  # cached IR sits next to the .onnx
-
-    if os.path.exists(ir_path):
-        emit("⚡ Loading cached OpenVINO IR (skips ONNX conversion)...", job_id=job_id,
+    if ext == ".xml":
+        emit(f"⚡ Loading OpenVINO IR directly: {os.path.basename(model_path)}", job_id=job_id,
              stage="detection", ui_message="Loading detection model...")
-        model = core.read_model(ir_path)
+        model = core.read_model(model_path)
+
+    elif ext == ".onnx":
+        ir_path = os.path.splitext(model_path)[0] + ".xml"
+        if os.path.exists(ir_path):
+            emit("⚡ Loading cached FP32 OpenVINO IR (skips ONNX conversion)...", job_id=job_id,
+                 stage="detection", ui_message="Loading detection model...")
+            model = core.read_model(ir_path)
+        else:
+            emit("🔄 First run — converting YOLOX-S ONNX to OpenVINO IR (one-time cost)...", job_id=job_id,
+                 stage="detection", ui_message="Preparing detection model for the first time...")
+            model = core.read_model(model_path)
+            ov.save_model(model, ir_path)  # cache it — future runs load the .xml branch above
     else:
-        emit("🔄 First run — converting YOLOX-S ONNX to OpenVINO IR (one-time cost)...", job_id=job_id,
-             stage="detection", ui_message="Preparing detection model for the first time...")
-        model = core.read_model(onnx_path)
-        ov.save_model(model, ir_path)  # cache it — every future job loads the .xml branch above instead
+        raise ValueError(f"Unsupported model file type: {model_path}")
 
     compiled_model = core.compile_model(model, "CPU")
     input_layer = compiled_model.input(0)

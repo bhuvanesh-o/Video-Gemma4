@@ -6,9 +6,12 @@ venv/
 .venv/
 env/
 
-# ── Model weights (large binaries — let the auto-download guard fetch these) ─
-*.onnx
-*.pt
+# Large generated artifacts — regenerate locally, never commit
+calibration_frames.npy
+weights/*.onnx
+weights/*.xml
+weights/*.bin
+storage/jobs/
 
 # ── Source videos & sliced segments (large media, regenerable from source) ──
 *.mp4
@@ -43,3 +46,5 @@ token.pickle
 # for my rough
 rough.py
 rough.html
+
+.npy

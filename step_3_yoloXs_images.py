@@ -67,13 +67,26 @@ def main(job_id):
     TIMESTAMPS_EXCEL = path_for(job_id, "segment_timestamps.xlsx")
     SEGMENT_DIR      = dir_for(job_id, "trial_video_segments")
     ASSET_DIR        = dir_for(job_id, "final_assets")
-    ONNX_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small.onnx")  # shared across jobs, not job-scoped — no need to re-download per job
+    ONNX_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small.onnx")
+    INT8_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small_int8.xml")
     TEMP_DIR         = dir_for(job_id, "temp")
 
     # 🧠 1B: DETECTOR INPUT CORE SETTINGS
     # ------------------------------------------------------------------------------
     INPUT_SIZE       = (640, 640)  # Dimensions to compress frames for the ONNX grid.
     TRUCK_CLASS_ID   = 7           # COCO dataset index for trucks. DO NOT CHANGE.
+
+    # ⚙️ MODEL PRECISION SWITCH — toggle between FP32 (baseline) and INT8 (faster,
+    # small accuracy tradeoff). INT8 requires weights/yolox_small_int8.xml to
+    # already exist — run build_calibration_data.py + quantize_int8.py first.
+    MODEL_PRECISION = "INT8"   # "FP32" or "INT8"
+
+    MODEL_PATH = INT8_PATH if MODEL_PRECISION == "INT8" else ONNX_PATH
+    if MODEL_PRECISION == "INT8" and not os.path.exists(INT8_PATH):
+        raise FileNotFoundError(
+            f"{INT8_PATH} not found. Run build_calibration_data.py then quantize_int8.py "
+            f"first, or set MODEL_PRECISION back to 'FP32'."
+        )
 
     # 🎯 1C: DETECTOR CONFIDENCE HYPER-PARAMETERS
     # ------------------------------------------------------------------------------
@@ -176,10 +189,9 @@ def main(job_id):
     # ==============================================================================
     # ── SECTION 2: LOAD AI ENGINES INTO CPU ───────────────────────────────────────
     # ==============================================================================
-    # Section 2: LOAD AI ENGINES INTO CPU
-    emit("🚀 Loading YOLOX-S via OpenVINO (CPU)...", job_id=job_id,
-        stage="detection", ui_message="Loading the truck detection model...")
-    infer_request, input_layer, output_layer = load_yolox_session(ONNX_PATH, job_id=job_id)
+    emit(f"🚀 Loading YOLOX-S via OpenVINO ({MODEL_PRECISION}, CPU)...", job_id=job_id,
+         stage="detection", ui_message="Loading the truck detection model...")
+    infer_request, input_layer, output_layer = load_yolox_session(MODEL_PATH, job_id=job_id)
 
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
@@ -212,7 +224,7 @@ def main(job_id):
 
         # inside the per-segment "for idx, row in df_times.iterrows():" loop, replace the
         # run_detection_tracking(...) call with:
-        
+
         active_state_buffer = run_detection_tracking(
             local_video_path, local_out_vid, t_start,
             infer_request, input_layer, output_layer, INPUT_SIZE, TRUCK_CLASS_ID,
