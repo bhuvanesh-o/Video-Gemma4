@@ -8,9 +8,9 @@ env/
 
 # Large generated artifacts — regenerate locally, never commit
 calibration_frames.npy
-weights/*.onnx
-weights/*.xml
-weights/*.bin
+*.onnx
+*.xml
+*.bin
 storage/jobs/
 
 # ── Source videos & sliced segments (large media, regenerable from source) ──
