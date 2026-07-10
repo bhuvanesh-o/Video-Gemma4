@@ -26,6 +26,7 @@ so the frontend can keep a live running count of trucks found without having
 to parse the text.
 """
 import os
+import re          # <-- add this — needed for _PLATE_CHAR_PATTERN
 import cv2
 import numpy as np
 import pandas as pd
@@ -34,7 +35,58 @@ import urllib.request
 # import onnxruntime as ort
 import openvino as ov          # was: import onnxruntime as ort
 
+from paddleocr import TextDetection, TextRecognition   # was: from paddleocr import PaddleOCR
+
 from progress import emit
+
+# Lazy-loaded singleton — PaddleOCR's detector+recognizer model loads once per
+# process, reused across every compile_segment_database() call for the
+# lifetime of the job (and across jobs, if they share a process).
+
+_plate_detector = None
+
+
+# Lazy-loaded singleton — the detector model loads once per process, reused
+# across every truck for the lifetime of the job.
+
+_plate_text_detector = None
+
+
+# Only Latin letters, digits, spaces, hyphens allowed — this is what rejects
+# Devanagari/Hindi decorative truck-body text outright, since real plate
+# content never contains non-Latin script.
+_PLATE_CHAR_PATTERN = re.compile(r'^[A-Za-z0-9\s\-]+$')
+
+
+
+# ==============================================================================
+# ── compute_frame_quality_score ────────────────────────────────────────────────
+# ==============================================================================
+def compute_frame_quality_score(crop, x1, y1, x2, y2, frame_w, frame_h):
+    """
+    Scores a single frame's truck crop on how good a REPRESENTATIVE PHOTO it
+    would make — replaces the old "closest to optical center" metric, which
+    never actually measured image quality at all.
+
+    Weighted by:
+      - Sharpness (Laplacian variance) — motion blur is the single biggest
+        killer of plate legibility, so this carries the most weight.
+      - Size — bigger box = more pixels of actual detail to work with.
+        Secondary factor, since a far-but-sharp truck is still usable.
+      - Edge-clipping penalty — a box touching the frame boundary usually
+        means the truck is entering/exiting frame and partially cut off.
+    """
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    area = (x2 - x1) * (y2 - y1)
+    size_ratio = area / (frame_w * frame_h)
+
+    touches_edge = (x1 <= 2 or y1 <= 2 or x2 >= frame_w - 2 or y2 >= frame_h - 2)
+    edge_penalty = 0.5 if touches_edge else 1.0
+
+    return (sharpness * (1.0 + size_ratio * 2.0)) * edge_penalty
+
 # ==============================================================================
 # ── ensure_yolox_weights ───────────────────────────────────────────────────────
 # ==============================================================================
@@ -126,6 +178,8 @@ def decode_outputs(outputs, img_size, strides=(8, 16, 32)):
     outputs[..., :2] = (outputs[..., :2] + grids) * exp_strides
     outputs[..., 2:4] = np.exp(outputs[..., 2:4]) * exp_strides
     return outputs
+
+
 # ==============================================================================
 # ── get_truck_boxes ────────────────────────────────────────────────────────────
 # ==============================================================================
@@ -228,15 +282,23 @@ class LightweightTracker:
 def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_request, input_layer, output_layer,
                             input_size, truck_class_id, detection_score_thr, detection_nms_thr,
                             tracker_max_disappeared, tracker_distance_thr, collision_std_guard,
-                            plate_margin_width_clip, plate_bottom_height_clip, job_id=None):
+                            max_candidate_frames, job_id=None):
     """
-    (docstring unchanged from your original — same per-segment detect+track loop)
+    Per-segment frame-by-frame detect+track loop.
+
+    REFACTOR NOTE (best-crop rework): each track's profile now keeps a
+    "top_candidates" shortlist — the best max_candidate_frames frames seen so
+    far, ranked by compute_frame_quality_score() — instead of a single
+    "closest to center" hero frame. This is what lets compile_segment_database
+    later evaluate PLATE legibility across several real candidate frames
+    instead of gambling on one. plate_margin_width_clip/plate_bottom_height_clip
+    are no longer needed here — the fallback percentage-crop now happens later,
+    in select_best_crops(), operating on the saved candidate crop directly.
     """
     cap = cv2.VideoCapture(local_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frame_center_x, frame_center_y = w / 2, h / 2
     out_writer = cv2.VideoWriter(local_out_vid, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
     tracker = LightweightTracker(max_disappeared=tracker_max_disappeared, distance_threshold=tracker_distance_thr)
     active_state_buffer = {}
@@ -250,16 +312,8 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
         current_absolute_time = t_start + (frame_count / fps)
         img, ratio = preprocess(frame, input_size)
 
-        # OpenVINO swap: was
-        #   raw_out = ort_session.run(None, {input_name: img[None, :, :, :]})[0]
-        # infer_request is reused across every frame — created once in load_yolox_session.
         infer_request.infer({input_layer: img[None, :, :, :]})
-        # .copy() matters here: the tensor's .data is a view into a buffer that OpenVINO
-        # reuses on the NEXT infer() call. decode_outputs() below mutates this array in
-        # place, and without a copy, that mutation could corrupt shared buffer state that
-        # the next frame's infer() call reads from.
         raw_out = infer_request.get_output_tensor(output_layer.index).data.copy()
-
         decoded = decode_outputs(raw_out, input_size)[0]
 
         truck_boxes = get_truck_boxes(decoded, ratio, w, h, score_thr=detection_score_thr,
@@ -271,34 +325,51 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
             width = x2 - x1
             height = y2 - y1
             aspect_ratio = width / max(height, 1)
-            box_center_x, box_center_y = (x1 + x2) / 2, (y1 + y2) / 2
+
+
+            # FIX: extract the crop BEFORE any annotation drawing touches `frame`.
+            # cv2.rectangle/putText mutate frame in-place — drawing first and
+            # cropping after was baking the debug overlay (green box, "TRUCK ID"
+            # label) directly into every saved truck/plate photo.
+            candidate_crop = frame[y1:y2, x1:x2].copy()
+
+
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f"TRUCK ID: {track_id}", (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
             if track_id not in active_state_buffer:
                 active_state_buffer[track_id] = {
                     "in_time": current_absolute_time, "out_time": current_absolute_time,
-                    "best_center_dist": float('inf'), "best_truck_img": None,
-                    "best_plate_img": None, "aspect_ratios": [], "widths": [], "frames_tracked": 0,
+                    "top_candidates": [],  # list of {"score": float, "crop": np.array}, capped + sorted descending
+                    "aspect_ratios": [], "widths": [], "frames_tracked": 0,
                     "first_box": [x1, y1, x2, y2], "last_box": [x1, y1, x2, y2]
                 }
             profile = active_state_buffer[track_id]
             profile["out_time"] = current_absolute_time
             profile["frames_tracked"] += 1
             profile["last_box"] = [x1, y1, x2, y2]
+
             profile["widths"].append(width)
             recent_widths = profile["widths"][-3:]
             is_collision = len(recent_widths) == 3 and np.std(recent_widths) > collision_std_guard
+
             if not is_collision:
                 profile["aspect_ratios"].append(aspect_ratio)
-            dist_to_center = math.hypot(frame_center_x - box_center_x, frame_center_y - box_center_y)
-            if dist_to_center < profile["best_center_dist"]:
-                profile["best_center_dist"] = dist_to_center
-                profile["best_truck_img"] = frame[y1:y2, x1:x2].copy()
-                px1 = int(x1 + (width * plate_margin_width_clip))
-                px2 = int(x2 - (width * plate_margin_width_clip))
-                py1 = int(y2 - (height * plate_bottom_height_clip))
-                py2 = int(y2)
-                profile["best_plate_img"] = frame[max(0, py1):min(h, py2), max(0, px1):min(w, px2)].copy()
+
+                # Candidate shortlist insertion — skipped during collisions,
+                # same reasoning as the aspect-ratio guard above: an
+                # overlapping/occluded crop is not a reliable hero-frame
+                # candidate, so don't let it compete for a shortlist slot.
+                candidate_crop = frame[y1:y2, x1:x2]
+                if candidate_crop.size > 0:
+                    score = compute_frame_quality_score(candidate_crop, x1, y1, x2, y2, w, h)
+                    candidates = profile["top_candidates"]
+                    if len(candidates) < max_candidate_frames:
+                        candidates.append({"score": score, "crop": candidate_crop.copy()})
+                        candidates.sort(key=lambda c: c["score"], reverse=True)
+                    elif score > candidates[-1]["score"]:
+                        candidates[-1] = {"score": score, "crop": candidate_crop.copy()}
+                        candidates.sort(key=lambda c: c["score"], reverse=True)
 
         out_writer.write(frame)
         frame_count += 1
@@ -306,17 +377,16 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
     cap.release()
     out_writer.release()
     return active_state_buffer
+
 # ==============================================================================
 # ── merge_broken_tracks ────────────────────────────────────────────────────────
 # ==============================================================================
-def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spatial_gap):
+def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spatial_gap, max_candidate_frames):
     """
-    Chronological Spatial Association Matrix (Merge Pass Engine).
-    Stitches broken tracks caused by momentary visual obstacles or deep shadows by
-    merging any two tracks that line up both temporally and spatially. Mutates and
-    returns active_state_buffer with merged-away IDs removed.
-
-    No emit() calls in here — this is pure logic, no status messages needed.
+    (docstring unchanged — same chronological spatial association logic)
+    REFACTOR NOTE: merges each track's top_candidates shortlist together
+    instead of comparing single best_center_dist values, then re-sorts and
+    truncates back down to max_candidate_frames.
     """
     track_ids = sorted(list(active_state_buffer.keys()), key=lambda k: active_state_buffer[k]["in_time"])
     for i in range(len(track_ids)):
@@ -325,63 +395,294 @@ def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spati
             if idA in active_state_buffer and idB in active_state_buffer:
                 tA = active_state_buffer[idA]
                 tB = active_state_buffer[idB]
-                # Verify chronological threshold delta
                 if 0 <= (tB["in_time"] - tA["out_time"]) < merge_max_time_gap:
-                    # Spatial Validation mapping
                     bA = tA["last_box"]
                     bB = tB["first_box"]
                     cA_x, cA_y = (bA[0] + bA[2]) / 2, (bA[1] + bA[3]) / 2
                     cB_x, cB_y = (bB[0] + bB[2]) / 2, (bB[1] + bB[3]) / 2
                     spatial_distance = math.hypot(cA_x - cB_x, cA_y - cB_y)
-                    # Merge profiles if tracks line up temporally and spatially
                     if spatial_distance < merge_max_spatial_gap:
                         tA["out_time"] = max(tA["out_time"], tB["out_time"])
                         tA["frames_tracked"] += tB["frames_tracked"]
                         tA["aspect_ratios"].extend(tB["aspect_ratios"])
                         tA["widths"].extend(tB["widths"])
                         tA["last_box"] = tB["last_box"]
-                        # Retain the highest-quality image crop from the combined set
-                        if tB["best_center_dist"] < tA["best_center_dist"]:
-                            tA["best_center_dist"] = tB["best_center_dist"]
-                            tA["best_truck_img"] = tB["best_truck_img"]
-                            tA["best_plate_img"] = tB["best_plate_img"]
+
+                        tA["top_candidates"].extend(tB["top_candidates"])
+                        tA["top_candidates"].sort(key=lambda c: c["score"], reverse=True)
+                        tA["top_candidates"] = tA["top_candidates"][:max_candidate_frames]
+
                         del active_state_buffer[idB]
     return active_state_buffer
+
+
+
+
+def get_plate_text_detector(limit_side_len=960, limit_type="max"):
+    """
+    Standalone PaddleOCR text DETECTION module — deliberately NOT the full
+    PaddleOCR() pipeline. See the imports comment above for why: this gets
+    us per-box confidence (dt_scores) at roughly half the compute cost of
+    running detection + recognition together, since we only need to know
+    "is a plate-shaped region here, and how confident," not the decoded text.
+
+    limit_side_len / limit_type: PaddleOCR's own internal resize controls —
+    (item #3) this replaces manually downscaling crops ourselves. The
+    detection model already resizes its input internally before running;
+    limit_type="max" + limit_side_len=960 caps the LARGER side of whatever
+    crop comes in at 960px before that internal resize happens. Since your
+    truck crops can be huge (a truck filling most of a 4K frame), this stops
+    detection cost from scaling with full crop resolution. Lower to 640 for
+    more speed if plates are still detected reliably on your footage; raise
+    it if small/distant plates start getting missed.
+
+    NOTE: only the FIRST call's limit_side_len/limit_type actually take
+    effect, since this is a singleton — the model isn't rebuilt on later
+    calls even if you pass different values.
+
+    ITEM #5 (not active yet, documented for later): PaddleOCR ships detection
+    models in different size tiers — you're currently on "medium"
+    (PP-OCRv6_medium_det). A smaller "mobile"-tier variant, if one exists for
+    the v6 line, would trade some accuracy for more speed and is a
+    reasonable next lever if 1+2+3 together still aren't fast enough. Verify
+    the exact model name for the v6 line (run `paddleocr text_detection
+    --help` or check PaddleOCR's docs) before swapping — don't guess the
+    string — then change model_name below to try it.
+    """
+    global _plate_text_detector
+    if _plate_text_detector is None:
+        _plate_text_detector = TextDetection(
+            model_name="PP-OCRv6_medium_det",   # <- item #5 lever: swap to a verified smaller model name here later
+            device="cpu",
+            enable_mkldnn=False,    # <-- ADDED: same PIR-executor/oneDNN regression you'd
+                                    #     already debugged for the old PaddleOCR() pipeline —
+                                    #     the standalone TextDetection module apparently
+                                    #     defaults to oneDNN on and needed this explicitly too
+            limit_side_len=limit_side_len,
+            limit_type=limit_type,
+        )
+    return _plate_text_detector
+
+def get_plate_text_recognizer():
+    """
+    Standalone recognition module — used ONLY as a content-based tiebreaker on
+    a small shortlist of the strongest detected regions, not on every
+    candidate. This is what lets us reject plate-SHAPED, plate-COLORED text
+    that still isn't actually a plate (e.g. a painted slogan in a matching
+    yellow/white color scheme) — shape and color alone can't catch that,
+    only reading the actual characters can.
+    """
+    global _plate_text_recognizer
+    if _plate_text_recognizer is None:
+        _plate_text_recognizer = TextRecognition(
+            model_name="PP-OCRv6_medium_rec",   # already cached locally from earlier runs
+            device="cpu", enable_mkldnn=False,
+        )
+    return _plate_text_recognizer
+
+def compute_plate_color_score(region):
+    """
+    Scores how visually consistent a region is with an Indian plate's flat
+    yellow (commercial) or white (private) background, versus a truck's
+    typically multi-colored painted livery/decorative bumper art (pink, teal,
+    yellow-multicolor patterns are common) or a shadow/dark surface.
+
+    Camera-position-independent — works purely off color distribution, not
+    where the region sits in frame.
+    """
+    if region.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+
+    yellow_mask = (h >= 15) & (h <= 35) & (s >= 80) & (v >= 100)
+    white_mask = (s <= 40) & (v >= 150)
+
+    return float((yellow_mask | white_mask).mean())
+
+
+def is_plate_like_text(text, min_alnum_chars=4):
+    """Rejects recognized text with any non-Latin/digit/space/hyphen characters
+    (catches Devanagari decorative text) or too few real characters (catches
+    near-empty/junk recognitions)."""
+    if not text:
+        return False
+    if not _PLATE_CHAR_PATTERN.match(text):
+        return False
+    return sum(c.isalnum() for c in text) >= min_alnum_chars
+
+
+# ==============================================================================
+# ── locate_plate_via_text_detection ────────────────────────────────────────────
+# ==============================================================================
+def locate_plate_regions(crop, detector, bottom_fraction=0.6, min_aspect_ratio=1.8, max_aspect_ratio=6.0):
+    """
+    Returns a list of {"crop": ndarray, "det_score": float} for every
+    plate-SHAPED region found — not just the single best one. We need the
+    full set here because the highest detection-confidence region isn't
+    always the actual plate (a painted slogan can score just as high), so
+    downstream scoring (color + recognition) needs multiple candidates to
+    choose between, not one pre-committed guess.
+    """
+    h, w = crop.shape[:2]
+    y_start = int(h * (1 - bottom_fraction))
+    search_region = crop[y_start:h, :]
+    if search_region.size == 0:
+        return []
+
+    try:
+        output = detector.predict(search_region, batch_size=1)
+    except Exception:
+        return []
+
+    result = next(iter(output), None)
+    if result is None:
+        return []
+
+    polys = result.get("dt_polys")
+    scores = result.get("dt_scores")
+    if polys is None or scores is None or len(polys) == 0:
+        return []
+
+    regions = []
+    for poly, score in zip(polys, scores):
+        xs = [pt[0] for pt in poly]
+        ys = [pt[1] for pt in poly]
+        bx1, bx2 = int(min(xs)), int(max(xs))
+        by1, by2 = int(min(ys)), int(max(ys))
+        bw, bh = bx2 - bx1, by2 - by1
+        if bh <= 0:
+            continue
+        if not (min_aspect_ratio <= (bw / bh) <= max_aspect_ratio):
+            continue
+        pad_x, pad_y = int(bw * 0.1), int(bh * 0.25)
+        cx1 = max(0, bx1 - pad_x)
+        cx2 = min(search_region.shape[1], bx2 + pad_x)
+        cy1 = max(0, by1 - pad_y)
+        cy2 = min(search_region.shape[0], by2 + pad_y)
+        region_crop = search_region[cy1:cy2, cx1:cx2]
+        if region_crop.size > 0:
+            regions.append({"crop": region_crop, "det_score": float(score)})
+
+    return regions
+
+
+# ==============================================================================
+# ── select_best_crops ──────────────────────────────────────────────────────────
+# ==============================================================================
+def select_best_crops(top_candidates, plate_margin_width_clip, plate_bottom_height_clip,
+                       plate_confidence_thr=0.5, early_exit_confidence=0.85,
+                       color_score_weight=0.4, recognition_check_top_n=2, job_id=None):
+    """
+    Truck photo: highest quality-scored candidate frame — unchanged.
+
+    Plate crop, in order:
+      1. Detect all plate-shaped regions across candidate frames (early-exits
+         once a combined shape+color score clears early_exit_confidence).
+      2. Score each region by det_score blended with compute_plate_color_score
+         — this is what rejects the shadow/wrong-fragment false positives.
+      3. Run RECOGNITION only on the top recognition_check_top_n regions —
+         this is what rejects plate-shaped, plate-colored text that still
+         isn't a real plate (e.g. a Hindi slogan painted in a matching
+         yellow/white palette). First region whose recognized text passes
+         is_plate_like_text() wins outright.
+      4. If nothing passes content validation, fall back to the highest
+         combined shape+color score if it clears plate_confidence_thr.
+      5. If nothing clears that either, fall back to the old percentage-crop.
+    """
+    if not top_candidates:
+        return None, None
+
+    top_candidates = sorted(top_candidates, key=lambda c: c["score"], reverse=True)
+    truck_crop = top_candidates[0]["crop"]
+
+    det_detector = get_plate_text_detector()
+    all_regions = []
+    for candidate in top_candidates:
+        for r in locate_plate_regions(candidate["crop"], det_detector):
+            color_score = compute_plate_color_score(r["crop"])
+            combined = r["det_score"] * (1 - color_score_weight) + color_score * color_score_weight
+            all_regions.append({"crop": r["crop"], "combined_score": combined})
+        if all_regions and max(r["combined_score"] for r in all_regions) >= early_exit_confidence:
+            break
+
+    if all_regions:
+        all_regions.sort(key=lambda r: r["combined_score"], reverse=True)
+
+        recognizer = get_plate_text_recognizer()
+        for region in all_regions[:recognition_check_top_n]:
+            try:
+                rec_output = recognizer.predict(region["crop"], batch_size=1)
+                rec_result = next(iter(rec_output), None)
+            except Exception:
+                continue
+            if rec_result is None:
+                continue
+            rec_text = rec_result.get("rec_text", "")
+            rec_score = rec_result.get("rec_score", 0.0)
+            if is_plate_like_text(rec_text) and rec_score >= 0.3:
+                return truck_crop, region["crop"]   # content-validated — trust immediately
+
+        best = all_regions[0]
+        if best["combined_score"] >= plate_confidence_thr:
+            if job_id is not None:
+                emit("      ⚠️ Plate content validation inconclusive — using best shape/color match.",
+                     job_id=job_id, stage="detection", ui_message="")
+            return truck_crop, best["crop"]
+
+    # True fallback — nothing found or nothing confident enough.
+    height, width = truck_crop.shape[:2]
+    fx1 = int(width * plate_margin_width_clip)
+    fx2 = int(width * (1 - plate_margin_width_clip))
+    fy1 = int(height * (1 - plate_bottom_height_clip))
+    fy2 = height
+    fallback_crop = truck_crop[fy1:fy2, fx1:fx2]
+    if job_id is not None:
+        emit("      ⚠️ No confident plate detection — used percentage-crop fallback.",
+             job_id=job_id, stage="detection", ui_message="")
+    return truck_crop, (fallback_crop if fallback_crop.size > 0 else None)
+
+
 # ==============================================================================
 # ── compile_segment_database ───────────────────────────────────────────────────
 # ==============================================================================
-def compile_segment_database(active_state_buffer, seg_id, master_video_name, asset_dir, min_valid_frames_logged, job_id=None):
+def compile_segment_database(active_state_buffer, seg_id, master_video_name, asset_dir, min_valid_frames_logged,
+                              plate_margin_width_clip, plate_bottom_height_clip,
+                              plate_confidence_thr=0.5, early_exit_confidence=0.85,
+                              color_score_weight=0.4, recognition_check_top_n=2, job_id=None):
     """
-    Database Compilation Phase: filters out tracks that don't meet the lifespan rule,
-    classifies each truck by aspect ratio, saves its best truck/plate crops to disk,
-    builds local-file HYPERLINK formulas, and returns the list of row dicts to log.
+    (docstring unchanged)
     """
     rows = []
     for track_id, profile in active_state_buffer.items():
-        # Reject tracker artifacts that do not satisfy our strict lifespan rules
         if profile["frames_tracked"] < min_valid_frames_logged:
             continue
         voted_id = f"TRUCK_{seg_id}_{track_id}"
-        # Estimate vehicle class configurations using statistical median profiling
         avg_ratio = np.median(profile["aspect_ratios"]) if len(profile["aspect_ratios"]) > 0 else 1.0
         truck_type, tyres = ("Multi-Axle/Trailer", "10-14") if avg_ratio > 1.6 else ("Heavy Tipper", "6-10") if avg_ratio > 1.2 else ("Small Box", "4-6")
-        # Set file storage location links
+
         truck_img_path = os.path.join(asset_dir, "truck_crops", f"{voted_id}_truck.jpg")
         plate_img_path = os.path.join(asset_dir, "plate_crops", f"{voted_id}_plate.jpg")
-        # Save Truck image crop files
-        if profile["best_truck_img"] is not None and profile["best_truck_img"].size > 0:
-            cv2.imwrite(truck_img_path, profile["best_truck_img"])
-            # Excel HYPERLINK formula pointing straight at the local file (no cloud round-trip needed)
+
+        truck_crop, plate_crop = select_best_crops(
+            profile["top_candidates"], plate_margin_width_clip, plate_bottom_height_clip,
+            plate_confidence_thr=plate_confidence_thr, early_exit_confidence=early_exit_confidence,
+            color_score_weight=color_score_weight, recognition_check_top_n=recognition_check_top_n,
+            job_id=job_id
+        )
+
+        if truck_crop is not None and truck_crop.size > 0:
+            cv2.imwrite(truck_img_path, truck_crop)
             truck_link = f'=HYPERLINK("{truck_img_path}", "View Truck")'
         else:
             truck_link = "NO_IMAGE"
-        # Save License Plate image crop files
-        if profile["best_plate_img"] is not None and profile["best_plate_img"].size > 0:
-            cv2.imwrite(plate_img_path, profile["best_plate_img"])
+
+        if plate_crop is not None and plate_crop.size > 0:
+            cv2.imwrite(plate_img_path, plate_crop)
             plate_link = f'=HYPERLINK("{plate_img_path}", "View Plate")'
         else:
             plate_link = "NO_PLATE"
-        # Append entry dictionary block into the database collection array
+
         rows.append({
             "Vehicle ID": voted_id.upper(),
             "In Time": round(profile["in_time"], 2),
@@ -396,6 +697,7 @@ def compile_segment_database(active_state_buffer, seg_id, master_video_name, ass
              stage="detection", ui_message=f"Found a {truck_type.lower()} — added to your registry.",
              meta={"truck_found": True})
     return rows
+
 # ==============================================================================
 # ── save_vehicle_registry ──────────────────────────────────────────────────────
 # ==============================================================================
