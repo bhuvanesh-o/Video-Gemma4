@@ -8,6 +8,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* ==========================================================================
+     1. GLOBAL VARIABLES & THEME
+     ========================================================================== */
   :root {
     --bg: #0A0D14;
     --surface-solid: #131826;
@@ -27,9 +30,13 @@
     --font-mono: 'IBM Plex Mono', monospace;
     --ease: cubic-bezier(0.16, 1, 0.3, 1);
   }
+  
+  /* Reset and base body styling */
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); -webkit-font-smoothing: antialiased; }
   body { min-height: 100vh; display: flex; flex-direction: column; align-items: center; position: relative; overflow-x: hidden; }
+  
+  /* Background grid pattern */
   .backdrop {
     position: fixed; inset: 0; pointer-events: none; z-index: 0;
     background:
@@ -41,13 +48,58 @@
     background-image: repeating-linear-gradient(90deg, var(--border-soft) 0 24px, transparent 24px 48px);
     opacity: 0.6;
   }
+  
+  /* Topbar navigation */
   main, .topbar { position: relative; z-index: 1; }
-  .topbar { width: 100%; max-width: 720px; padding: 28px 24px 0; display: flex; align-items: center; gap: 10px; }
+  .topbar { width: 100%; max-width: 1200px; padding: 28px 24px 0; display: flex; align-items: center; gap: 10px; }
   .topbar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
   .topbar .wordmark { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; color: var(--text-muted); text-transform: uppercase; }
+  
+  /* Base container for all views */
   .view { width: 100%; max-width: 720px; padding: 64px 24px 96px; display: flex; flex-direction: column; align-items: center; text-align: center; }
-  [hidden] { display: none !important; }
+  [hidden] { display: none !important; } /* Utility class to swap views */
 
+  /* ==========================================================================
+     2. GRID LAYOUT FOR PROCESSING STATE (The 2-Column Split)
+     ========================================================================== */
+  .view-processing { 
+    max-width: 1200px; /* Made wider to accommodate both columns */
+    padding: 48px 24px 80px; 
+    text-align: left; 
+    align-items: stretch; /* Ensures both columns stretch to the same vertical bounds */
+  }
+  
+  .processing-grid { 
+    display: grid; 
+    grid-template-columns: 1fr 1fr; /* '1fr 1fr' means two columns taking exactly 50% width each */
+    gap: 32px; /* Gutters between the left and right panels */
+    width: 100%; 
+    align-items: start; 
+  }
+  
+  /* Shared styling for both the Left and Right panels */
+  .proc-left, .proc-right {
+    background: var(--surface-solid); 
+    border: 1px solid var(--border); 
+    border-radius: 16px; 
+    padding: 36px 24px; 
+    width: 100%; 
+  }
+
+  /* Specifics for the Left Panel (Center UI) */
+  .proc-left { 
+    display: flex; flex-direction: column; align-items: center; text-align: center; 
+  }
+  
+  /* Specifics for the Right Panel (Live Chat) */
+  .proc-right { 
+    display: flex; flex-direction: column; 
+    height: 520px; /* HARD REQUIREMENT: Fixed height forces the inside to become scrollable instead of growing infinitely */
+  }
+
+  /* ==========================================================================
+     3. IDLE STATE STYLES (Drag & Drop)
+     ========================================================================== */
   .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--amber); margin-bottom: 18px; opacity: 0; animation: rise 0.7s var(--ease) 0.05s forwards; }
   h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(32px, 5vw, 46px); line-height: 1.12; letter-spacing: -0.01em; margin: 0 0 18px; opacity: 0; animation: rise 0.7s var(--ease) 0.12s forwards; }
   .sub { font-size: 16px; line-height: 1.6; color: var(--text-muted); max-width: 480px; margin: 0 0 40px; opacity: 0; animation: rise 0.7s var(--ease) 0.2s forwards; }
@@ -76,32 +128,89 @@
   .btn-ghost { background: transparent; color: var(--text-muted); border: 1.5px solid var(--border); }
   .btn-ghost:hover { border-color: #3A4258; color: var(--text); }
   #uploadBtn { margin-top: 28px; opacity: 0; animation: rise 0.7s var(--ease) 0.34s forwards; }
-  .reject-msg { margin-top: 18px; color: var(--red); font-size: 14px; max-width: 480px; line-height: 1.5; }
+  .reject-msg { margin-top: 18px; color: var(--red); font-size: 14px; max-width: 480px; line-height: 1.5; text-align: center; }
 
-  .proc-icon-wrap { width: 84px; height: 84px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--amber-soft); margin-bottom: 28px; position: relative; }
+  /* ==========================================================================
+     4. LIVE CHAT FEED STYLES (Right Column)
+     ========================================================================== */
+  .feed-header { 
+    display: flex; align-items: center; justify-content: space-between; 
+    padding-bottom: 14px; border-bottom: 1px solid var(--border-soft); margin-bottom: 16px; 
+  }
+  .feed-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+  .feed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+  
+  /* The scrolling container */
+  .feed-list { 
+    flex: 1; /* Instructs it to fill all remaining vertical space in the .proc-right box */
+    overflow-y: auto; /* Magic property: adds a vertical scrollbar ONLY if content exceeds height */
+    display: flex; flex-direction: column; gap: 10px; padding-right: 6px; 
+  }
+  
+  /* Custom scrollbar to match dark theme */
+  .feed-list::-webkit-scrollbar { width: 4px; }
+  .feed-list::-webkit-scrollbar-track { background: transparent; }
+  .feed-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  
+  /* Individual Chat Bubbles */
+  .feed-item { 
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; 
+    color: var(--text); background: var(--surface-2); padding: 10px 14px; 
+    border-radius: 8px; border-left: 3px solid var(--border); 
+    animation: rise 0.25s var(--ease) forwards; /* Pop-in animation */
+  }
+  
+  /* Colored left borders indicating which stage sent the message */
+  .feed-item.segmentation { border-left-color: var(--amber); }
+  .feed-item.slicing { border-left-color: #38BDF8; }
+  .feed-item.detection { border-left-color: var(--teal); }
+  .feed-item.done { border-left-color: var(--teal); background: var(--teal-soft); }
+  .feed-item.error { border-left-color: var(--red); color: var(--red); }
+
+  /* ==========================================================================
+     5. CENTER UI STYLES (Left Column)
+     ========================================================================== */
+  .proc-icon-wrap { width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--amber-soft); margin-bottom: 20px; position: relative; }
   .proc-icon-wrap::before { content: ""; position: absolute; inset: -6px; border-radius: 50%; border: 1.5px solid var(--amber); opacity: 0.35; animation: pulse-ring 2.2s ease-out infinite; }
-  .proc-icon-wrap svg { width: 38px; height: 38px; color: var(--amber); }
-  .proc-title { font-family: var(--font-display); font-weight: 700; font-size: clamp(24px, 4vw, 30px); margin: 0 0 12px; transition: opacity 0.35s var(--ease), transform 0.35s var(--ease); }
-  .proc-desc { font-size: 15px; color: var(--text-muted); max-width: 460px; line-height: 1.6; margin: 0; min-height: 24px; transition: opacity 0.35s var(--ease), transform 0.35s var(--ease); }
+  .proc-icon-wrap svg { width: 32px; height: 32px; color: var(--amber); }
+  .proc-title { font-family: var(--font-display); font-weight: 700; font-size: clamp(22px, 3.5vw, 26px); margin: 0 0 10px; transition: opacity 0.35s var(--ease), transform 0.35s var(--ease); }
+  .proc-desc { font-size: 14px; color: var(--text-muted); max-width: 380px; line-height: 1.5; margin: 0; min-height: 22px; transition: opacity 0.35s var(--ease), transform 0.35s var(--ease); }
   .text-swap { opacity: 0; transform: translateY(6px); }
-  .truck-pill { margin-top: 22px; font-family: var(--font-mono); font-size: 13px; color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(255, 178, 36, 0.3); padding: 7px 16px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
+  .truck-pill { margin-top: 18px; font-family: var(--font-mono); font-size: 12px; color: var(--amber); background: var(--amber-soft); border: 1px solid rgba(255, 178, 36, 0.3); padding: 6px 14px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; }
   .truck-pill.pop { animation: pop 0.35s var(--ease); }
 
-  .trail { display: flex; align-items: center; margin-top: 56px; width: 100%; max-width: 460px; }
-  .trail-node { display: flex; flex-direction: column; align-items: center; gap: 10px; flex-shrink: 0; }
+  .trail { display: flex; align-items: center; margin-top: 36px; width: 100%; max-width: 380px; }
+  .trail-node { display: flex; flex-direction: column; align-items: center; gap: 8px; flex-shrink: 0; }
   .node-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); background: var(--bg); transition: all 0.4s var(--ease); position: relative; }
   .node-dot svg { width: 9px; height: 9px; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0; transition: opacity 0.2s; }
   .trail-node.active .node-dot { border-color: var(--amber); background: var(--amber); box-shadow: 0 0 0 5px var(--amber-soft); }
   .trail-node.done .node-dot { border-color: var(--teal); background: var(--teal); }
   .trail-node.done .node-dot svg { opacity: 1; color: #052A20; }
-  .node-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; color: var(--text-faint); text-transform: uppercase; transition: color 0.3s var(--ease); }
+  .node-label { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; color: var(--text-faint); text-transform: uppercase; transition: color 0.3s var(--ease); }
   .trail-node.active .node-label { color: var(--amber); }
   .trail-node.done .node-label { color: var(--teal); }
-  .trail-connector { flex: 1; height: 2px; position: relative; margin: 0 6px 22px; overflow: hidden; }
+  .trail-connector { flex: 1; height: 2px; position: relative; margin: 0 6px 20px; overflow: hidden; }
   .trail-connector::before { content: ""; position: absolute; inset: 0; background-image: repeating-linear-gradient(90deg, var(--border) 0 8px, transparent 8px 16px); }
   .trail-connector.done::before { background-image: repeating-linear-gradient(90deg, var(--teal) 0 8px, transparent 8px 16px); }
   .trail-connector.live::before { background-image: repeating-linear-gradient(90deg, var(--amber) 0 8px, transparent 8px 16px); animation: dash-travel 0.9s linear infinite; }
 
+  /* ==========================================================================
+     6. VIDEO GALLERY STYLES
+     ========================================================================== */
+  .video-gallery { 
+    width: 100%; margin-top: 40px; padding-top: 24px; 
+    border-top: 1px solid var(--border-soft); 
+    animation: rise 0.5s var(--ease) forwards; 
+  }
+  .gallery-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--teal); margin: 0 0 16px 0; }
+  
+  /* Auto-wrapping grid: fits as many 200px minimum width videos as it can per row */
+  .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; width: 100%; }
+  .video-grid video { width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000; }
+
+  /* ==========================================================================
+     7. DONE & ERROR STATES
+     ========================================================================== */
   .done-icon { width: 76px; height: 76px; color: var(--teal); margin-bottom: 24px; }
   .done-icon .ring { opacity: 0.25; }
   .done-icon .check { stroke-dasharray: 28; stroke-dashoffset: 28; animation: draw 0.5s var(--ease) 0.25s forwards; }
@@ -110,6 +219,7 @@
   .done-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
   .error-icon { width: 64px; height: 64px; color: var(--red); margin-bottom: 24px; }
 
+  /* Animations */
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes pulse-ring { 0% { transform: scale(0.9); opacity: 0.45; } 100% { transform: scale(1.35); opacity: 0; } }
   @keyframes dash-travel { from { background-position: 0 0; } to { background-position: -16px 0; } }
@@ -118,12 +228,10 @@
   @keyframes scan-sweep { 0%, 100% { transform: translateX(-8px); opacity: 0.4; } 50% { transform: translateX(8px); opacity: 1; } }
   .icon-scan .sweep { animation: scan-sweep 1.6s ease-in-out infinite; transform-origin: center; }
 
-  @media (prefers-reduced-motion: reduce) {
-    * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
-  }
-  @media (max-width: 480px) {
-    .trail { max-width: 100%; }
-    .node-label { font-size: 9.5px; }
+  /* RESPONSIVE DESIGN: Stack the 2 columns into 1 column on smaller screens */
+  @media (max-width: 820px) { 
+    .processing-grid { grid-template-columns: 1fr; } 
+    .proc-right { height: 320px; } 
   }
 </style>
 </head>
@@ -136,7 +244,9 @@
   <span class="wordmark">Traffic Analysis Pipeline</span>
 </div>
 
-<!-- IDLE STATE — upload -->
+<!-- ==========================================================================
+     [STATE 1] IDLE VIEW: The initial drag & drop screen
+     ========================================================================== -->
 <main class="view view-idle" id="viewIdle">
   <div class="eyebrow">Dashcam footage &rarr; vehicle registry</div>
   <h1>Point a camera at the road.<br>Get a truck registry back.</h1>
@@ -156,34 +266,64 @@
   <p class="reject-msg" id="rejectMsg" hidden></p>
 </main>
 
-<!-- PROCESSING STATE — hybrid: big current-stage headline + slim lane-marker trail -->
+<!-- ==========================================================================
+     [STATE 2] PROCESSING VIEW: 2-Column Split Layout
+     ========================================================================== -->
 <main class="view view-processing" id="viewProcessing" hidden>
-  <div class="proc-icon-wrap">
-    <svg id="procIconSvg" class="icon-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></svg>
-  </div>
-  <h2 class="proc-title" id="procTitle">Preparing your footage</h2>
-  <p class="proc-desc" id="procDesc" aria-live="polite">Getting things ready...</p>
-  <div class="truck-pill" id="truckPill" hidden><span id="truckCount">0</span>&nbsp;trucks found so far</div>
+  
+  <!-- CSS Grid Container splitting layout 50/50 -->
+  <div class="processing-grid">
+    
+    <!-- === LEFT COLUMN: Center Pipeline & Video Gallery === -->
 
-  <div class="trail" id="trail">
-    <div class="trail-node" data-stage="segmentation">
-      <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-      <span class="node-label">Segmenting</span>
+    <div class="proc-left">
+      <div class="proc-icon-wrap">
+        <svg id="procIconSvg" class="icon-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></svg>
+      </div>
+      <h2 class="proc-title" id="procTitle">Preparing your footage</h2>
+      <p class="proc-desc" id="procDesc" aria-live="polite">Getting things ready...</p>
+      <div class="truck-pill" id="truckPill" hidden><span id="truckCount">0</span>&nbsp;trucks found so far</div>
+
+      <div class="trail" id="trail">
+        <div class="trail-node" data-stage="segmentation">
+          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+          <span class="node-label">Segmenting</span>
+        </div>
+        <div class="trail-connector" data-between="0"></div>
+        <div class="trail-node" data-stage="slicing">
+          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+          <span class="node-label">Slicing</span>
+        </div>
+        <div class="trail-connector" data-between="1"></div>
+        <div class="trail-node" data-stage="detection">
+          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+          <span class="node-label">Detecting</span>
+        </div>
+      </div>
+
+
+      <!-- Container where JS will inject annotated YOLO .mp4 videos -->
+      <div id="videoGallery" class="video-gallery" hidden>
+        <h3 class="gallery-title">Annotated Segments</h3>
+        <div class="video-grid" id="videoGrid"></div>
+      </div>
     </div>
-    <div class="trail-connector" data-between="0"></div>
-    <div class="trail-node" data-stage="slicing">
-      <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-      <span class="node-label">Slicing</span>
+
+    <!-- === RIGHT COLUMN: Live Text Stream Feed === -->
+    <div class="proc-right">
+      <div class="feed-header">
+        <div class="feed-title"><span class="feed-dot"></span> Live Activity Feed</div>
+      </div>
+      <!-- Container where JS will append new log messages -->
+      <div class="feed-list" id="feedList"></div>
     </div>
-    <div class="trail-connector" data-between="1"></div>
-    <div class="trail-node" data-stage="detection">
-      <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-      <span class="node-label">Detecting</span>
-    </div>
+    
   </div>
 </main>
 
-<!-- DONE STATE -->
+<!-- ==========================================================================
+     [STATE 3] DONE VIEW: Success Screen and Table
+     ========================================================================== -->
 <main class="view view-done" id="viewDone" hidden>
   <svg class="done-icon" viewBox="0 0 36 36" fill="none">
     <circle class="ring" cx="18" cy="18" r="16" stroke="currentColor" stroke-width="2"></circle>
@@ -192,9 +332,8 @@
   <h2>Registry ready</h2>
   <p id="doneSummary">Your vehicle registry has been compiled.</p>
 
-  <!-- NEW: results preview table -->
-  <div id="resultsTableWrap" style="width:100%; max-width:640px; overflow-x:auto; margin-bottom:24px;"></div>
 
+  <div id="resultsTableWrap" style="width:100%; max-width:640px; overflow-x:auto; margin-bottom:24px;"></div>
 
   <div class="done-actions">
     <button id="downloadBtn" class="btn-primary">Download Excel Results</button>
@@ -202,7 +341,9 @@
   </div>
 </main>
 
-<!-- ERROR STATE -->
+<!-- ==========================================================================
+     [STATE 4] ERROR VIEW
+     ========================================================================== -->
 <main class="view view-error" id="viewError" hidden>
   <svg class="error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 3l10 18H2L12 3z"></path>
@@ -216,26 +357,27 @@
   </div>
 </main>
 
+<!-- ==========================================================================
+     JAVASCRIPT LOGIC
+     ========================================================================== -->
 <script>
+  // --- CONSTANTS & DOM ELEMENTS ---
   const STAGE_ICONS = {
     preparing: `<rect x="3" y="7" width="14" height="11" rx="2"></rect><path d="M17 11l4-2.5v7L17 13"></path>`,
     segmentation: `<g class="icon-scan"><path d="M2 12h3l2-6 3 12 3-9 2 5h7"></path></g>`,
     slicing: `<circle cx="6" cy="6" r="2.4"></circle><circle cx="6" cy="18" r="2.4"></circle><path d="M8 7.5L20 19M8 16.5L20 5"></path>`,
     detection: `<path d="M3 16V9a1 1 0 0 1 1-1h9v8"></path><path d="M13 11h4l3 3v2h-2"></path><circle cx="7.5" cy="17.5" r="1.6"></circle><circle cx="16.5" cy="17.5" r="1.6"></circle>`
   };
-  const STAGE_TITLES = {
-    preparing: "Preparing your footage",
-    segmentation: "Segmenting the video",
-    slicing: "Slicing clips & logging timestamps",
-    detection: "Detecting trucks"
-  };
+  const STAGE_TITLES = { preparing: "Preparing your footage", segmentation: "Segmenting the video", slicing: "Slicing clips & logging timestamps", detection: "Detecting trucks" };
   const STAGE_ORDER = ["segmentation", "slicing", "detection"];
 
+  // View Containers
   const viewIdle = document.getElementById('viewIdle');
   const viewProcessing = document.getElementById('viewProcessing');
   const viewDone = document.getElementById('viewDone');
   const viewError = document.getElementById('viewError');
 
+  // Input & Drag/Drop
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
   const dzTitle = document.getElementById('dzTitle');
@@ -243,6 +385,7 @@
   const uploadBtn = document.getElementById('uploadBtn');
   const rejectMsg = document.getElementById('rejectMsg');
 
+  // Processing UI Components
   const procIconSvg = document.getElementById('procIconSvg');
   const procTitle = document.getElementById('procTitle');
   const procDesc = document.getElementById('procDesc');
@@ -250,22 +393,31 @@
   const truckCountEl = document.getElementById('truckCount');
   const trailNodes = document.querySelectorAll('.trail-node');
   const trailConnectors = document.querySelectorAll('.trail-connector');
+  
+  // Target container for the Live Text Stream feed
+  const feedList = document.getElementById('feedList'); 
 
+  // Completion UI Components
   const doneSummary = document.getElementById('doneSummary');
   const downloadBtn = document.getElementById('downloadBtn');
   const errorText = document.getElementById('errorText');
 
+  // State Trackers
   let currentJobId = "";
   let selectedFile = null;
   let currentStage = null;
   let truckCount = 0;
   let eventSource = null;
 
+  /**
+   * Helper function to transition between the 4 main screen states (Idle, Processing, Done, Error)
+   */
   function showView(view) {
     [viewIdle, viewProcessing, viewDone, viewError].forEach(v => v.hidden = true);
     view.hidden = false;
   }
 
+  // --- EVENT LISTENERS (File selection and drag-and-drop) ---
   function setFile(file) {
     selectedFile = file;
     dropzone.classList.add('has-file');
@@ -275,27 +427,19 @@
     rejectMsg.hidden = true;
   }
 
-  fileInput.addEventListener('change', () => {
-    if (fileInput.files[0]) setFile(fileInput.files[0]);
-  });
-  ['dragover', 'dragenter'].forEach(evt =>
-    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); })
-  );
-  ['dragleave', 'dragend'].forEach(evt =>
-    dropzone.addEventListener(evt, () => dropzone.classList.remove('drag-over'))
-  );
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+  ['dragover', 'dragenter'].forEach(evt => dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add('drag-over'); }));
+  ['dragleave', 'dragend'].forEach(evt => dropzone.addEventListener(evt, () => dropzone.classList.remove('drag-over')));
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropzone.classList.remove('drag-over');
-    if (e.dataTransfer.files[0]) {
-      fileInput.files = e.dataTransfer.files;
-      setFile(e.dataTransfer.files[0]);
-    }
+    if (e.dataTransfer.files[0]) { fileInput.files = e.dataTransfer.files; setFile(e.dataTransfer.files[0]); }
   });
-  dropzone.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
-  });
+  dropzone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }});
 
+  /**
+   * Helper to fade out old text and fade in new text (used for the center subtitle)
+   */
   function swapText(el, text) {
     if (!text || el.textContent === text) return;
     el.classList.add('text-swap');
@@ -305,6 +449,54 @@
     }, 160);
   }
 
+  /**
+   * Appends streamed text to the right-side Live Chat Panel.
+   * Creates a new div, styles it based on the stage, and forces the scrollbar to the bottom.
+   */
+  function appendFeedMessage(text, stageClass = "") {
+    if (!text) return; // Prevent empty bubbles
+    const item = document.createElement('div');
+    item.className = `feed-item ${stageClass}`; // e.g., 'feed-item segmentation'
+    item.textContent = text;
+    feedList.appendChild(item);
+    
+    // Auto-scroll logic: pushes the scroll position to the total height of the container
+    feedList.scrollTop = feedList.scrollHeight; 
+  }
+
+  /**
+   * Calls the backend API to fetch annotated .mp4 URLs, creates <video> tags, 
+   * and injects them into the left-panel grid.
+   */
+  async function loadAnnotatedVideos(jobId) {
+    const gallery = document.getElementById('videoGallery');
+    const grid = document.getElementById('videoGrid');
+    grid.innerHTML = ''; // Clear old videos
+
+    try {
+      const res = await fetch(`/api/videos/${jobId}`);
+      const data = await res.json();
+      
+      if (data.videos && data.videos.length > 0) {
+        gallery.hidden = false;
+        
+        // Loop through returned URLs and build video elements
+        data.videos.forEach(vidUrl => {
+          const videoEl = document.createElement('video');
+          videoEl.src = vidUrl;
+          videoEl.controls = true; // Show native browser controls (play/pause)
+          videoEl.muted = true;    // Mute by default to prevent sudden noise
+          grid.appendChild(videoEl);
+        });
+      }
+    } catch (err) {
+      console.error("Couldn't load annotated videos", err);
+    }
+  }
+
+  /**
+   * Updates the center UI (icons, bold title, stage timeline dots)
+   */
   function setStage(stage) {
     if (stage === currentStage) return;
     currentStage = stage;
@@ -350,54 +542,39 @@
     truckCountEl.textContent = truckCount;
     truckPill.hidden = false;
     truckPill.classList.remove('pop');
-    void truckPill.offsetWidth;
+    void truckPill.offsetWidth; // Trigger DOM reflow to restart CSS animation
     truckPill.classList.add('pop');
   }
 
-
-
-
-
   /**
- * Fetches this job's results as JSON and renders them as an HTML table
- * inside #resultsTableWrap. Called once, right when the "done" SSE event
- * fires (see the onmessage handler).
- */
+   * Fetches JSON of the final Excel file and creates a preview table in the browser
+   */
   async function loadPreviewTable(jobId) {
     const wrap = document.getElementById('resultsTableWrap');
-    wrap.innerHTML = ''; // clear out any table left over from a previous job
+    wrap.innerHTML = '';
 
     try {
       const res = await fetch(`/api/preview/${jobId}`);
       const data = await res.json();
 
-      // No trucks were found — backend still returns valid JSON, just with
-      // an empty rows array (see save_vehicle_registry's empty-headers-only
-      // fallback). Show a friendly message instead of an empty table shell.
       if (!data.rows || data.rows.length === 0) {
         wrap.innerHTML = '<p style="color:var(--text-muted)">No rows to preview.</p>';
         return;
       }
 
-      // Build the header row from data.columns — this stays in sync
-      // automatically even if the Excel schema changes later, since we're
-      // not hardcoding column names here.
       let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr>';
       data.columns.forEach(c => {
         html += `<th style="text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text-muted);">${c}</th>`;
       });
       html += '</tr></thead><tbody>';
 
-      // Build one <tr> per truck row
       data.rows.forEach(row => {
         html += '<tr>';
         data.columns.forEach(col => {
           const val = row[col];
           let display;
-
-          // Special-case the two image columns: render an actual clickable
-          // thumbnail instead of plain text. Every other column just shows
-          // its raw value (or a dash if it's null/empty).
+          
+          // Render actual images if the column is Plate File or Truck File
           if (col === "Plate File" || col === "Truck File") {
             display = val
               ? `<a href="${val}" target="_blank"><img src="${val}" style="height:36px; border-radius:4px; vertical-align:middle;"></a>`
@@ -405,7 +582,6 @@
           } else {
             display = val ?? '—';
           }
-
           html += `<td style="padding:6px 10px; border-bottom:1px solid var(--border-soft);">${display}</td>`;
         });
         html += '</tr>';
@@ -415,16 +591,13 @@
       wrap.innerHTML = html;
 
     } catch (err) {
-      // Network failure, bad JSON, etc. — don't let this crash the rest of
-      // the done-screen; just show an inline error where the table would be.
       wrap.innerHTML = '<p style="color:var(--red)">Couldn\'t load preview.</p>';
     }
   }
 
-
-
-
-
+  /**
+   * Uploads the video file via POST and receives a Job ID back
+   */
   async function uploadVideo() {
     if (!selectedFile) return;
     uploadBtn.disabled = true;
@@ -451,11 +624,14 @@
     }
 
     currentJobId = data.job_id;
-    resetProcessingUI();
-    showView(viewProcessing);
-    connectStream(currentJobId);
+    resetProcessingUI();       // Clean up old UI state
+    showView(viewProcessing);  // Transition to the 2-column view
+    connectStream(currentJobId); // Start listening to SSE stream
   }
 
+  /**
+   * Resets all visual elements so a new job starts with a clean slate
+   */
   function resetProcessingUI() {
     currentStage = null;
     truckCount = 0;
@@ -464,8 +640,18 @@
     trailConnectors.forEach(c => c.classList.remove('live', 'done'));
     setStage('preparing');
     procDesc.textContent = "Getting things ready...";
+    
+    // Clear out the live chat
+    feedList.innerHTML = '';
+    
+    // Hide and clear the video gallery
+    document.getElementById('videoGallery').hidden = true;
+    document.getElementById('videoGrid').innerHTML = '';
   }
 
+  /**
+   * Connects to the SSE endpoint and parses streaming JSON events
+   */
   function connectStream(jobId) {
     if (eventSource) eventSource.close();
     eventSource = new EventSource(`/api/stream/${jobId}`);
@@ -474,22 +660,43 @@
       let e;
       try { e = JSON.parse(event.data); } catch (err) { return; }
 
+      // Handle normal stage progress updates
       if (e.type === "stage_update") {
         if (e.stage) setStage(e.stage);
-        if (e.text) swapText(procDesc, e.text);
+        
+        if (e.text) {
+          swapText(procDesc, e.text); // Updates left panel subtitle
+          appendFeedMessage(e.text, e.stage || "");  // Appends to right panel chat log
+        }
+        
+        // Check metadata for truck count increments
         if (e.meta && e.meta.truck_found) bumpTruckCount();
+        
+      // Handle the end of a specific pipeline step (Segmentation -> Slicing -> Detection)
       } else if (e.type === "stage_complete") {
         markStageComplete(e.stage);
+        appendFeedMessage(`Completed ${e.stage} stage.`, e.stage || "");
+        
+      // Handle the complete end of the entire job
       } else if (e.type === "done") {
         eventSource.close();
+        appendFeedMessage("Pipeline execution complete.", "done");
+        
+        // Fetch and embed the finished annotated .mp4 clips
+        loadAnnotatedVideos(currentJobId); 
+
         const word = truckCount === 1 ? "truck" : "trucks";
         doneSummary.textContent = truckCount > 0
           ? `Found ${truckCount} ${word} in your footage — timestamps, crops, and plate images are all logged.`
           : `Scan complete — no trucks were found in this footage.`;
+        
         showView(viewDone);
-        loadPreviewTable(currentJobId);   // <-- new
+        loadPreviewTable(currentJobId); // Fetch and build the Excel preview
+        
+      // Handle fatal backend errors
       } else if (e.type === "error") {
         eventSource.close();
+        appendFeedMessage(`Error: ${e.text}`, "error"); // Shows in red
         errorText.textContent = e.text || "The pipeline ran into a problem.";
         showView(viewError);
       }
@@ -511,6 +718,7 @@
     showView(viewIdle);
   }
 
+  // --- BUTTON WIRING ---
   uploadBtn.addEventListener('click', uploadVideo);
   downloadBtn.addEventListener('click', downloadExcel);
   document.getElementById('resetBtnDone').addEventListener('click', resetToIdle);

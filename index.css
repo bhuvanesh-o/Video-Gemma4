@@ -1,0 +1,93 @@
+/* ==========================================================================
+     LAYOUT: 2-COLUMN GRID
+     ========================================================================== */
+  .view-processing { 
+    max-width: 1100px; /* Made wider to fit two columns side-by-side */
+    padding: 48px 24px 80px; 
+    text-align: left; 
+  }
+  .processing-grid { 
+    display: grid; 
+    grid-template-columns: 1fr 1fr; /* Two equal columns */
+    gap: 32px; /* Space between the left and right panels */
+    width: 100%; 
+    align-items: start; 
+  }
+  
+  /* Left panel styling */
+  .proc-left { 
+    display: flex; flex-direction: column; align-items: center; 
+    text-align: center; background: var(--surface-solid); 
+    border: 1px solid var(--border); border-radius: 16px; 
+    padding: 36px 24px; width: 100%; 
+  }
+  /* Right panel styling (fixed height for scrolling) */
+  .proc-right { 
+    display: flex; flex-direction: column; 
+    background: var(--surface-solid); border: 1px solid var(--border); 
+    border-radius: 16px; padding: 24px; 
+    height: 480px; /* Forces the box to have a height so the inside can scroll */
+    width: 100%; 
+  }
+
+  /* ==========================================================================
+     LIVE FEED / CHAT STYLES
+     ========================================================================== */
+  .feed-header { 
+    display: flex; align-items: center; justify-content: space-between; 
+    padding-bottom: 14px; border-bottom: 1px solid var(--border-soft); margin-bottom: 16px; 
+  }
+  .feed-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); display: flex; align-items: center; gap: 8px; }
+  .feed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+  
+  /* The scrolling container for the text messages */
+  .feed-list { 
+    flex: 1; 
+    overflow-y: auto; /* Adds a scrollbar automatically if text overflows */
+    display: flex; flex-direction: column; gap: 10px; padding-right: 6px; 
+  }
+  /* Custom thin dark scrollbar */
+  .feed-list::-webkit-scrollbar { width: 4px; }
+  .feed-list::-webkit-scrollbar-track { background: transparent; }
+  .feed-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  
+  /* Individual chat bubbles */
+  .feed-item { 
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.5; 
+    color: var(--text); background: var(--surface-2); padding: 10px 14px; 
+    border-radius: 8px; 
+    border-left: 3px solid var(--border); /* Colored edge indicator */
+    animation: rise 0.25s var(--ease) forwards; /* Pop-in animation */
+  }
+  
+  /* Color codes for different stages in the chat */
+  .feed-item.segmentation { border-left-color: var(--amber); }
+  .feed-item.slicing { border-left-color: #38BDF8; }
+  .feed-item.detection { border-left-color: var(--teal); }
+  .feed-item.done { border-left-color: var(--teal); background: var(--teal-soft); }
+  .feed-item.error { border-left-color: var(--red); color: var(--red); }
+
+  /* ==========================================================================
+     VIDEO GALLERY STYLES
+     ========================================================================== */
+  .video-gallery { 
+    width: 100%; margin-top: 40px; padding-top: 24px; 
+    border-top: 1px solid var(--border-soft); 
+    animation: rise 0.5s var(--ease) forwards; 
+  }
+  .gallery-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--teal); margin: 0 0 16px 0; }
+  
+  /* Auto-wrapping grid for videos (if 1 video it's full width, if 2 they sit side-by-side) */
+  .video-grid { 
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+    gap: 16px; width: 100%; 
+  }
+  .video-grid video { 
+    width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000; 
+  }
+
+  /* Responsive: stack columns on smaller screens */
+  @media (max-width: 820px) { 
+    .processing-grid { grid-template-columns: 1fr; } 
+    .proc-right { height: 320px; } 
+  }
