@@ -62,6 +62,37 @@ _PLATE_CHAR_PATTERN = re.compile(r'^[A-Za-z0-9\s\-]+$')
 # ==============================================================================
 # ── compute_frame_quality_score ────────────────────────────────────────────────
 # ==============================================================================
+
+def compute_frame_quality_score(crop, x1, y1, x2, y2, frame_w, frame_h,
+                                 size_sweet_spot_min, size_sweet_spot_max):
+    """
+    REFACTOR NOTE (sweet-spot sizing): size used to be a straight bonus —
+    bigger box always scored higher. That rewarded the truck's closest,
+    biggest, sharpest moment, which (given a fixed side-mounted camera) is
+    also the moment the truck is most side-on to the lens — the one point in
+    its journey LEAST likely to have a visible front plate. This now scores
+    size as a HILL peaking at the midpoint of the sweet-spot window, tapering
+    off toward either edge — genuine eligibility filtering (is this frame
+    even allowed to compete) happens separately, in run_detection_tracking;
+    this score just prefers the center of that window over its edges.
+    """
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    area = (x2 - x1) * (y2 - y1)
+    size_ratio = area / (frame_w * frame_h)
+
+    midpoint = (size_sweet_spot_min + size_sweet_spot_max) / 2
+    half_range = (size_sweet_spot_max - size_sweet_spot_min) / 2
+    distance_from_center = abs(size_ratio - midpoint)
+    size_fitness = max(0.0, 1.0 - (distance_from_center / half_range))  # 1.0 at center, 0.0 at window edges
+
+    touches_edge = (x1 <= 2 or y1 <= 2 or x2 >= frame_w - 2 or y2 >= frame_h - 2)
+    edge_penalty = 0.5 if touches_edge else 1.0
+
+    return sharpness * (0.5 + size_fitness) * edge_penalty
+
+'''
 def compute_frame_quality_score(crop, x1, y1, x2, y2, frame_w, frame_h):
     """
     Scores a single frame's truck crop on how good a REPRESENTATIVE PHOTO it
@@ -86,7 +117,7 @@ def compute_frame_quality_score(crop, x1, y1, x2, y2, frame_w, frame_h):
     edge_penalty = 0.5 if touches_edge else 1.0
 
     return (sharpness * (1.0 + size_ratio * 2.0)) * edge_penalty
-
+'''
 # ==============================================================================
 # ── ensure_yolox_weights ───────────────────────────────────────────────────────
 # ==============================================================================
@@ -179,6 +210,59 @@ def decode_outputs(outputs, img_size, strides=(8, 16, 32)):
     outputs[..., 2:4] = np.exp(outputs[..., 2:4]) * exp_strides
     return outputs
 
+# ==============================================================================
+# ── insert_spaced_candidate / dedupe_and_trim_candidates ──────────────────────
+# ==============================================================================
+def insert_spaced_candidate(candidates, new_candidate, max_candidates, min_spacing_frames):
+    """
+    Inserts a new candidate frame into a truck's shortlist, but ONLY keeps the
+    best-scoring frame within any given time neighborhood — same principle as
+    the spatial NMS already used on bounding boxes (get_truck_boxes), just
+    applied along time instead of space. This is what stops the shortlist
+    from filling up with 5 near-duplicate frames from one lucky stretch, while
+    still always keeping the best available frame at each rough position
+    (not whatever a fixed sampling schedule happened to land on).
+
+    Mutates `candidates` in place, keeps it sorted by score descending.
+    """
+    for i, existing in enumerate(candidates):
+        if abs(existing["frame_index"] - new_candidate["frame_index"]) < min_spacing_frames:
+            # Too close in time to an existing candidate — only ONE frame from
+            # this neighborhood survives, whichever scores higher.
+            if new_candidate["score"] > existing["score"]:
+                candidates[i] = new_candidate
+                candidates.sort(key=lambda c: c["score"], reverse=True)
+            return  # either replaced or discarded — never add as a separate entry
+
+    # No nearby candidate exists — this is a genuinely new time slot.
+    if len(candidates) < max_candidates:
+        candidates.append(new_candidate)
+    else:
+        worst_idx = min(range(len(candidates)), key=lambda idx: candidates[idx]["score"])
+        if new_candidate["score"] > candidates[worst_idx]["score"]:
+            candidates[worst_idx] = new_candidate
+        else:
+            return
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+
+
+def dedupe_and_trim_candidates(candidates, max_candidates, min_spacing_frames):
+    """
+    Same spacing rule as insert_spaced_candidate, but applied to a WHOLE list
+    at once — used by merge_broken_tracks() when combining two tracks' already-
+    built shortlists, where entries need to be re-deduplicated against each
+    other rather than inserted one at a time.
+    """
+    sorted_candidates = sorted(candidates, key=lambda c: c["score"], reverse=True)
+    accepted = []
+    for c in sorted_candidates:
+        if all(abs(c["frame_index"] - a["frame_index"]) >= min_spacing_frames for a in accepted):
+            accepted.append(c)
+        if len(accepted) >= max_candidates:
+            break
+    accepted.sort(key=lambda c: c["score"], reverse=True)
+    return accepted
+    
 
 # ==============================================================================
 # ── get_truck_boxes ────────────────────────────────────────────────────────────
@@ -282,18 +366,21 @@ class LightweightTracker:
 def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_request, input_layer, output_layer,
                             input_size, truck_class_id, detection_score_thr, detection_nms_thr,
                             tracker_max_disappeared, tracker_distance_thr, collision_std_guard,
-                            max_candidate_frames, job_id=None):
+                            max_candidate_frames, size_sweet_spot_min, size_sweet_spot_max,
+                            recede_tolerance, min_candidate_spacing_seconds, job_id=None):
     """
-    Per-segment frame-by-frame detect+track loop.
+    (docstring unchanged from before, plus:)
 
-    REFACTOR NOTE (best-crop rework): each track's profile now keeps a
-    "top_candidates" shortlist — the best max_candidate_frames frames seen so
-    far, ranked by compute_frame_quality_score() — instead of a single
-    "closest to center" hero frame. This is what lets compile_segment_database
-    later evaluate PLATE legibility across several real candidate frames
-    instead of gambling on one. plate_margin_width_clip/plate_bottom_height_clip
-    are no longer needed here — the fallback percentage-crop now happens later,
-    in select_best_crops(), operating on the saved candidate crop directly.
+    REFACTOR NOTE (approach-only + sweet-spot + spaced shortlist): candidate
+    frames are now only accepted while (a) the truck's box is still growing
+    toward its running peak width — NOT yet past its closest point and
+    turning to recede, since a fixed side-mounted camera can't get a usable
+    plate view once a truck has passed and is moving away — and (b) the box
+    occupies a fraction of the frame within [size_sweet_spot_min,
+    size_sweet_spot_max] — too far away is low-detail, too close is
+    distorted/near frame edge. Within those bounds, insert_spaced_candidate
+    keeps the shortlist spread across genuinely different moments instead of
+    letting one lucky stretch dominate all 5 slots.
     """
     cap = cv2.VideoCapture(local_video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -303,6 +390,10 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
     tracker = LightweightTracker(max_disappeared=tracker_max_disappeared, distance_threshold=tracker_distance_thr)
     active_state_buffer = {}
     frame_count = 0
+
+    # min_candidate_spacing_seconds -> frames, so the same config value behaves
+    # consistently across videos with different frame rates.
+    min_spacing_frames = max(1, int(fps * min_candidate_spacing_seconds))
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -326,13 +417,10 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
             height = y2 - y1
             aspect_ratio = width / max(height, 1)
 
-
-            # FIX: extract the crop BEFORE any annotation drawing touches `frame`.
-            # cv2.rectangle/putText mutate frame in-place — drawing first and
-            # cropping after was baking the debug overlay (green box, "TRUCK ID"
-            # label) directly into every saved truck/plate photo.
+            # Extract the crop BEFORE any annotation drawing touches `frame` —
+            # cv2.rectangle/putText mutate frame in-place, and drawing first
+            # bakes the debug overlay into every saved candidate crop.
             candidate_crop = frame[y1:y2, x1:x2].copy()
-
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(frame, f"TRUCK ID: {track_id}", (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -340,7 +428,9 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
             if track_id not in active_state_buffer:
                 active_state_buffer[track_id] = {
                     "in_time": current_absolute_time, "out_time": current_absolute_time,
-                    "top_candidates": [],  # list of {"score": float, "crop": np.array}, capped + sorted descending
+                    "top_candidates": [],
+                    "peak_width": 0,        # running max box width seen so far — proxy for "closest approach"
+                    "receding": False,      # flips True permanently once width drops meaningfully below peak
                     "aspect_ratios": [], "widths": [], "frames_tracked": 0,
                     "first_box": [x1, y1, x2, y2], "last_box": [x1, y1, x2, y2]
                 }
@@ -353,23 +443,37 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
             recent_widths = profile["widths"][-3:]
             is_collision = len(recent_widths) == 3 and np.std(recent_widths) > collision_std_guard
 
+            '''
+            # TEMP DEBUG
+            size_ratio_dbg = (width * height) / (w * h)
+            print(f"[DBG] t={current_absolute_time:.1f}s id={track_id} w={width} size_ratio={size_ratio_dbg:.3f} "
+                  f"peak={profile['peak_width']} receding={profile['receding']} collision={is_collision}")
+            '''
+
+            # Peak-width / receding tracking — this is what detects "has the
+            # truck passed its closest point and started moving away."
+            if width > profile["peak_width"]:
+                profile["peak_width"] = width
+            elif profile["peak_width"] > 0 and width < profile["peak_width"] * recede_tolerance:
+                profile["receding"] = True  # sticky — once past peak, stays past peak
+
             if not is_collision:
                 profile["aspect_ratios"].append(aspect_ratio)
 
-                # Candidate shortlist insertion — skipped during collisions,
-                # same reasoning as the aspect-ratio guard above: an
-                # overlapping/occluded crop is not a reliable hero-frame
-                # candidate, so don't let it compete for a shortlist slot.
-                candidate_crop = frame[y1:y2, x1:x2]
-                if candidate_crop.size > 0:
-                    score = compute_frame_quality_score(candidate_crop, x1, y1, x2, y2, w, h)
-                    candidates = profile["top_candidates"]
-                    if len(candidates) < max_candidate_frames:
-                        candidates.append({"score": score, "crop": candidate_crop.copy()})
-                        candidates.sort(key=lambda c: c["score"], reverse=True)
-                    elif score > candidates[-1]["score"]:
-                        candidates[-1] = {"score": score, "crop": candidate_crop.copy()}
-                        candidates.sort(key=lambda c: c["score"], reverse=True)
+                size_ratio = (width * height) / (w * h)
+
+
+                within_sweet_spot = size_sweet_spot_min <= size_ratio <= size_sweet_spot_max
+                eligible_for_candidacy = (not profile["receding"]) and within_sweet_spot
+
+                if eligible_for_candidacy and candidate_crop.size > 0:
+                    score = compute_frame_quality_score(
+                        candidate_crop, x1, y1, x2, y2, w, h,
+                        size_sweet_spot_min, size_sweet_spot_max
+                    )
+                    new_candidate = {"score": score, "crop": candidate_crop, "frame_index": frame_count}
+                    insert_spaced_candidate(profile["top_candidates"], new_candidate,
+                                             max_candidate_frames, min_spacing_frames)
 
         out_writer.write(frame)
         frame_count += 1
@@ -381,13 +485,15 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
 # ==============================================================================
 # ── merge_broken_tracks ────────────────────────────────────────────────────────
 # ==============================================================================
-def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spatial_gap, max_candidate_frames):
+def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spatial_gap,
+                         max_candidate_frames, min_candidate_spacing_seconds, fps):
     """
-    (docstring unchanged — same chronological spatial association logic)
-    REFACTOR NOTE: merges each track's top_candidates shortlist together
-    instead of comparing single best_center_dist values, then re-sorts and
-    truncates back down to max_candidate_frames.
+    (docstring unchanged) — now also merges peak_width (keep the larger),
+    receding (OR of both — if EITHER half was already past its peak, the
+    merged track is considered past peak too), and re-deduplicates the
+    combined candidate list with spacing enforcement rather than a raw concat.
     """
+    min_spacing_frames = max(1, int(fps * min_candidate_spacing_seconds))
     track_ids = sorted(list(active_state_buffer.keys()), key=lambda k: active_state_buffer[k]["in_time"])
     for i in range(len(track_ids)):
         for j in range(i+1, len(track_ids)):
@@ -408,9 +514,13 @@ def merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spati
                         tA["widths"].extend(tB["widths"])
                         tA["last_box"] = tB["last_box"]
 
-                        tA["top_candidates"].extend(tB["top_candidates"])
-                        tA["top_candidates"].sort(key=lambda c: c["score"], reverse=True)
-                        tA["top_candidates"] = tA["top_candidates"][:max_candidate_frames]
+                        tA["peak_width"] = max(tA["peak_width"], tB["peak_width"])
+                        tA["receding"] = tA["receding"] or tB["receding"]
+
+                        combined = tA["top_candidates"] + tB["top_candidates"]
+                        tA["top_candidates"] = dedupe_and_trim_candidates(
+                            combined, max_candidate_frames, min_spacing_frames
+                        )
 
                         del active_state_buffer[idB]
     return active_state_buffer
@@ -462,6 +572,9 @@ def get_plate_text_detector(limit_side_len=960, limit_type="max"):
             limit_type=limit_type,
         )
     return _plate_text_detector
+
+
+_plate_text_recognizer = None
 
 def get_plate_text_recognizer():
     """
@@ -691,7 +804,7 @@ def compile_segment_database(active_state_buffer, seg_id, master_video_name, ass
             "Tyres": tyres,
             "Plate File": plate_link,
             "Truck File": truck_link,
-            "Source": master_video_name
+            #"Source": master_video_name
         })
         emit(f"      ✅ Logged -> ID: {voted_id.upper()} | Type: {truck_type} | True Absolute Time: {profile['in_time']:.1f}s - {profile['out_time']:.1f}s", job_id=job_id,
              stage="detection", ui_message=f"Found a {truck_type.lower()} — added to your registry.",
@@ -713,7 +826,10 @@ def save_vehicle_registry(final_database, asset_dir, job_id=None):
         # file entirely. Otherwise the pipeline reports DONE but /download 404s,
         # since it was looking for a file that never got created — even though the
         # run itself succeeded, it just found nothing to log.
-        empty_columns = ["Vehicle ID", "In Time", "Out Time", "Truck Type", "Tyres", "Plate File", "Truck File", "Source"]
+        
+        #empty_columns = ["Vehicle ID", "In Time", "Out Time", "Truck Type", "Tyres", "Plate File", "Truck File", "Source"]
+        empty_columns = ["Vehicle ID", "In Time", "Out Time", "Truck Type", "Tyres", "Plate File", "Truck File"]
+
         df = pd.DataFrame(columns=empty_columns)
         excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
         df.to_excel(excel_path, index=False, engine='openpyxl')
@@ -721,7 +837,10 @@ def save_vehicle_registry(final_database, asset_dir, job_id=None):
              stage="detection", ui_message="")  # already said "no trucks" above — nothing new for the UI
         return
     # Convert data structures into clear Pandas DataFrames, sorting by filename and timeline timestamps
-    df = pd.DataFrame(final_database).sort_values(by=["Source", "In Time"]).reset_index(drop=True)
+    
+    # df = pd.DataFrame(final_database).sort_values(by=["Source", "In Time"]).reset_index(drop=True)
+    df = pd.DataFrame(final_database).sort_values(by=["In Time"]).reset_index(drop=True)
+
     # Define path destination mapping
     excel_path = os.path.join(asset_dir, "Vehicle_Registry_Master.xlsx")
     # Save using the openpyxl engine to ensure cell formulas remain fully executable inside spreadsheet software

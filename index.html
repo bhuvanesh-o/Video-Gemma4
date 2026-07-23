@@ -191,6 +191,11 @@
   </svg>
   <h2>Registry ready</h2>
   <p id="doneSummary">Your vehicle registry has been compiled.</p>
+
+  <!-- NEW: results preview table -->
+  <div id="resultsTableWrap" style="width:100%; max-width:640px; overflow-x:auto; margin-bottom:24px;"></div>
+
+
   <div class="done-actions">
     <button id="downloadBtn" class="btn-primary">Download Excel Results</button>
     <button id="resetBtnDone" class="btn-ghost">Process another video</button>
@@ -349,6 +354,77 @@
     truckPill.classList.add('pop');
   }
 
+
+
+
+
+  /**
+ * Fetches this job's results as JSON and renders them as an HTML table
+ * inside #resultsTableWrap. Called once, right when the "done" SSE event
+ * fires (see the onmessage handler).
+ */
+  async function loadPreviewTable(jobId) {
+    const wrap = document.getElementById('resultsTableWrap');
+    wrap.innerHTML = ''; // clear out any table left over from a previous job
+
+    try {
+      const res = await fetch(`/api/preview/${jobId}`);
+      const data = await res.json();
+
+      // No trucks were found — backend still returns valid JSON, just with
+      // an empty rows array (see save_vehicle_registry's empty-headers-only
+      // fallback). Show a friendly message instead of an empty table shell.
+      if (!data.rows || data.rows.length === 0) {
+        wrap.innerHTML = '<p style="color:var(--text-muted)">No rows to preview.</p>';
+        return;
+      }
+
+      // Build the header row from data.columns — this stays in sync
+      // automatically even if the Excel schema changes later, since we're
+      // not hardcoding column names here.
+      let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr>';
+      data.columns.forEach(c => {
+        html += `<th style="text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text-muted);">${c}</th>`;
+      });
+      html += '</tr></thead><tbody>';
+
+      // Build one <tr> per truck row
+      data.rows.forEach(row => {
+        html += '<tr>';
+        data.columns.forEach(col => {
+          const val = row[col];
+          let display;
+
+          // Special-case the two image columns: render an actual clickable
+          // thumbnail instead of plain text. Every other column just shows
+          // its raw value (or a dash if it's null/empty).
+          if (col === "Plate File" || col === "Truck File") {
+            display = val
+              ? `<a href="${val}" target="_blank"><img src="${val}" style="height:36px; border-radius:4px; vertical-align:middle;"></a>`
+              : '—';
+          } else {
+            display = val ?? '—';
+          }
+
+          html += `<td style="padding:6px 10px; border-bottom:1px solid var(--border-soft);">${display}</td>`;
+        });
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      wrap.innerHTML = html;
+
+    } catch (err) {
+      // Network failure, bad JSON, etc. — don't let this crash the rest of
+      // the done-screen; just show an inline error where the table would be.
+      wrap.innerHTML = '<p style="color:var(--red)">Couldn\'t load preview.</p>';
+    }
+  }
+
+
+
+
+
   async function uploadVideo() {
     if (!selectedFile) return;
     uploadBtn.disabled = true;
@@ -358,7 +434,7 @@
 
     let response, data;
     try {
-      response = await fetch('/upload', { method: 'POST', body: formData });
+      response = await fetch('/api/upload', { method: 'POST', body: formData });
       data = await response.json();
     } catch (err) {
       rejectMsg.textContent = "Couldn't reach the server. Check your connection and try again.";
@@ -392,7 +468,7 @@
 
   function connectStream(jobId) {
     if (eventSource) eventSource.close();
-    eventSource = new EventSource(`/stream/${jobId}`);
+    eventSource = new EventSource(`/api/stream/${jobId}`);
 
     eventSource.onmessage = (event) => {
       let e;
@@ -411,6 +487,7 @@
           ? `Found ${truckCount} ${word} in your footage — timestamps, crops, and plate images are all logged.`
           : `Scan complete — no trucks were found in this footage.`;
         showView(viewDone);
+        loadPreviewTable(currentJobId);   // <-- new
       } else if (e.type === "error") {
         eventSource.close();
         errorText.textContent = e.text || "The pipeline ran into a problem.";
@@ -420,7 +497,7 @@
   }
 
   function downloadExcel() {
-    window.location.href = `/download/${currentJobId}`;
+    window.location.href = `/api/download/${currentJobId}`;
   }
 
   function resetToIdle() {

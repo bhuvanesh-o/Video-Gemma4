@@ -22,6 +22,8 @@ storage/jobs/{job_id}/
 import os
 import shutil
 
+import time
+
 # Always anchored to wherever THIS file physically lives, regardless of
 # what folder VS Code/the terminal happens to be "in" when you run things.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -105,3 +107,24 @@ def delete_file(job_id, *relative_parts):
     path = path_for(job_id, *relative_parts)
     if os.path.exists(path):
         os.remove(path)
+
+
+def cleanup_old_jobs(max_age_hours=24):
+    """
+    Deletes any job folder under storage/jobs/ whose last-modified time is
+    older than max_age_hours. Client demo links get shared and revisited
+    unpredictably, so old uploads (someone else's footage, crops, excel
+    files) need to age out on their own instead of piling up forever.
+    """
+    if not os.path.exists(STORAGE_ROOT):
+        return
+    cutoff = time.time() - (max_age_hours * 3600)
+    for job_id in os.listdir(STORAGE_ROOT):
+        job_path = os.path.join(STORAGE_ROOT, job_id)
+        if not os.path.isdir(job_path):
+            continue
+        try:
+            if os.path.getmtime(job_path) < cutoff:
+                shutil.rmtree(job_path)
+        except OSError:
+            continue  # folder mid-write or already gone — skip rather than crash the whole sweep

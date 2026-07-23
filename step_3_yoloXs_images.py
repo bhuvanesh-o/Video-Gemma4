@@ -44,6 +44,7 @@ same folder as this script (or somewhere on your PYTHONPATH) so the imports belo
 import os
 import shutil
 import pandas as pd
+import cv2
 
 from step_3_functions_yoloXs_images import (
     ensure_yolox_weights,
@@ -189,6 +190,33 @@ def main(job_id):
     """
 
     
+        # 📐 1I: APPROACH-PHASE + SIZE SWEET-SPOT FILTERING
+    # ------------------------------------------------------------------------------
+    SIZE_SWEET_SPOT_MIN = 0.15   # truck's box must occupy at least 10% of frame area to be a candidate
+    SIZE_SWEET_SPOT_MAX = 0.70   # ...and no more than 25% — beyond this, likely too close/distorted
+    """
+    Placeholder starting values — calibrate against real footage: pause a
+    video where the truck's front is clearly angled toward your camera (not
+    yet side-on) and check what fraction of frame area its box occupies at
+    that moment. Adjust these two numbers to match what you actually see.
+    """
+    RECEDE_TOLERANCE = 0.90
+    """
+    Once box width drops below (peak_width_so_far * RECEDE_TOLERANCE), the
+    truck is considered past its closest point and receding — no further
+    candidate frames are collected for it after that. Lower (e.g. 0.80) =
+    more tolerant of width jitter before declaring "receding"; higher (e.g.
+    0.95) = declares receding sooner, more conservative about approach-only.
+    """
+    MIN_CANDIDATE_SPACING_SECONDS = 0.5
+    """
+    Minimum time gap enforced between any two frames in a truck's shortlist —
+    prevents 5 near-duplicate frames from one lucky stretch dominating the
+    shortlist. Expressed in seconds (not frames) so it behaves consistently
+    across videos with different frame rates.
+    """
+
+    
 
     # ==============================================================================
     # ── SYSTEM OVERHEAD SETUP ─────────────────────────────────────────────────────
@@ -255,6 +283,7 @@ def main(job_id):
             DETECTION_SCORE_THR, DETECTION_NMS_THR,
             TRACKER_MAX_DISAPPEARED, TRACKER_DISTANCE_THR,
             COLLISION_STD_GUARD, MAX_CANDIDATE_FRAMES,
+            SIZE_SWEET_SPOT_MIN, SIZE_SWEET_SPOT_MAX, RECEDE_TOLERANCE, MIN_CANDIDATE_SPACING_SECONDS,
             job_id=job_id
         )
 
@@ -267,13 +296,25 @@ def main(job_id):
         if os.path.exists(local_video_path): os.remove(local_video_path)
         if os.path.exists(local_out_vid): os.remove(local_out_vid)
 
-        active_state_buffer = merge_broken_tracks(active_state_buffer, MERGE_MAX_TIME_GAP, MERGE_MAX_SPATIAL_GAP, MAX_CANDIDATE_FRAMES)
+
+        # fps needed for merge's spacing dedup — read it once from the segment file
+        _cap_for_fps = cv2.VideoCapture(drive_video_path)
+        segment_fps = _cap_for_fps.get(cv2.CAP_PROP_FPS) or 30.0
+        _cap_for_fps.release()
+
+        active_state_buffer = merge_broken_tracks(
+            active_state_buffer, MERGE_MAX_TIME_GAP, MERGE_MAX_SPATIAL_GAP,
+            MAX_CANDIDATE_FRAMES, MIN_CANDIDATE_SPACING_SECONDS, segment_fps
+        )
+
 
         segment_rows = compile_segment_database(
             active_state_buffer, seg_id, master_video_name, ASSET_DIR, MIN_VALID_FRAMES_LOGGED,
             PLATE_MARGIN_WIDTH_CLIP, PLATE_BOTTOM_HEIGHT_CLIP,
             plate_confidence_thr=PLATE_CONFIDENCE_THRESHOLD,
             early_exit_confidence=EARLY_EXIT_CONFIDENCE,
+            color_score_weight=COLOR_SCORE_WEIGHT,
+            recognition_check_top_n=RECOGNITION_CHECK_TOP_N,
             job_id=job_id
         )
 
