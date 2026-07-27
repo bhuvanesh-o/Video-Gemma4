@@ -767,6 +767,7 @@ def compile_segment_database(active_state_buffer, seg_id, master_video_name, ass
     (docstring unchanged)
     """
     rows = []
+    segment_images = []  # collect this segment's truck image URLs to send as one batch
     for track_id, profile in active_state_buffer.items():
         if profile["frames_tracked"] < min_valid_frames_logged:
             continue
@@ -806,9 +807,24 @@ def compile_segment_database(active_state_buffer, seg_id, master_video_name, ass
             "Truck File": truck_link,
             #"Source": master_video_name
         })
+        '''
         emit(f"      ✅ Logged -> ID: {voted_id.upper()} | Type: {truck_type} | True Absolute Time: {profile['in_time']:.1f}s - {profile['out_time']:.1f}s", job_id=job_id,
              stage="detection", ui_message=f"Found a {truck_type.lower()} — added to your registry.",
              meta={"truck_found": True})
+        '''
+
+        truck_img_url = f"/api/image/{job_id}/truck_crops/{voted_id}_truck.jpg" if truck_link != "NO_IMAGE" else None
+        if truck_img_url:
+            segment_images.append(truck_img_url)
+        emit(f"      ✅ Logged -> ID: {voted_id.upper()} | Type: {truck_type} | True Absolute Time: {profile['in_time']:.1f}s - {profile['out_time']:.1f}s", job_id=job_id,
+             stage="detection", ui_message=f"Found a {truck_type.lower()} — added to your registry.",
+             meta={"truck_found": True})
+
+    if segment_images:
+        emit(f"      🖼️ Segment {seg_id}: {len(segment_images)} truck image(s) ready.", job_id=job_id,
+             stage="detection", ui_message="",
+             meta={"segment_images": {"seg_id": seg_id, "urls": segment_images}})
+
     return rows
 
 # ==============================================================================

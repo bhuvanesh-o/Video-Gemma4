@@ -7,6 +7,8 @@ from fastapi import APIRouter, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 import pandas as pd
 
+import zipfile
+
 # Import your existing, unmodified pipeline modules
 import storage
 import progress
@@ -14,6 +16,8 @@ import video_preprocess
 import step_1_segmentation
 import step_2_video_slice_excel_timestamp
 import step_3_yoloXs_images
+
+
 
 # REFACTOR NOTE (APIRouter split): this used to live directly on the FastAPI()
 # app in app.py. Moved here so app.py only wires routers together instead of
@@ -261,3 +265,27 @@ async def serve_annotated_video(job_id: str, filename: str):
     # 3. Return a FileResponse, which FastAPI automatically handles as a streamable video file
     from fastapi.responses import FileResponse
     return FileResponse(video_path, media_type="video/mp4")
+
+
+
+@router.get("/download-videos/{job_id}")
+async def download_annotated_videos(job_id: str):
+    """
+    Zips every annotated segment video for this job into one file and
+    serves that — avoids ever needing the browser to decode/play these
+    inline, so codec compatibility (mp4v vs H.264) stops being a concern.
+    """
+    video_dir = storage.path_for(job_id, "final_assets", "annotated_segments")
+    if not os.path.exists(video_dir):
+        return JSONResponse(status_code=404, content={"error": "No annotated videos found."})
+
+    files = [f for f in os.listdir(video_dir) if f.endswith(".mp4")]
+    if not files:
+        return JSONResponse(status_code=404, content={"error": "No annotated videos found."})
+
+    zip_path = storage.path_for(job_id, "final_assets", "annotated_segments.zip")
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for f in files:
+            zf.write(os.path.join(video_dir, f), arcname=f)
+
+    return FileResponse(zip_path, filename=f"Annotated_Videos_{job_id}.zip")

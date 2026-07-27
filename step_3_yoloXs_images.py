@@ -45,6 +45,7 @@ import os
 import shutil
 import pandas as pd
 import cv2
+import subprocess
 
 from step_3_functions_yoloXs_images import (
     ensure_yolox_weights,
@@ -289,8 +290,22 @@ def main(job_id):
 
         
         # Save finalized annotated video file back to the primary asset folder
+        '''
         final_video_dest = os.path.join(ASSET_DIR, "annotated_segments", f"annotated_{segment_filename}")
         shutil.copy(local_out_vid, final_video_dest)
+        '''
+
+        final_video_dest = os.path.join(ASSET_DIR, "annotated_segments", f"annotated_{segment_filename}")
+        # mp4v (OpenCV's default fourcc) isn't decodable by browsers — re-encode to H.264 so <video> can play it
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", local_out_vid, "-vcodec", "libx264", "-pix_fmt", "yuv420p", final_video_dest],
+                check=True, capture_output=True
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            emit(f"⚠️ ffmpeg re-encode failed ({e}) — copying raw file (may not play in browser).",
+                job_id=job_id, stage="detection", ui_message="")
+            shutil.copy(local_out_vid, final_video_dest)
 
         # Purge intermediate storage allocations to prevent local workspace bloating
         if os.path.exists(local_video_path): os.remove(local_video_path)

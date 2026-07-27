@@ -266,60 +266,63 @@
   <p class="reject-msg" id="rejectMsg" hidden></p>
 </main>
 
+
+
 <!-- ==========================================================================
      [STATE 2] PROCESSING VIEW: 2-Column Split Layout
      ========================================================================== -->
+
+
 <main class="view view-processing" id="viewProcessing" hidden>
-  
-  <!-- CSS Grid Container splitting layout 50/50 -->
   <div class="processing-grid">
-    
-    <!-- === LEFT COLUMN: Center Pipeline & Video Gallery === -->
 
-    <div class="proc-left">
-      <div class="proc-icon-wrap">
-        <svg id="procIconSvg" class="icon-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></svg>
-      </div>
-      <h2 class="proc-title" id="procTitle">Preparing your footage</h2>
-      <p class="proc-desc" id="procDesc" aria-live="polite">Getting things ready...</p>
-      <div class="truck-pill" id="truckPill" hidden><span id="truckCount">0</span>&nbsp;trucks found so far</div>
+    <div class="proc-left-col">
 
-      <div class="trail" id="trail">
-        <div class="trail-node" data-stage="segmentation">
-          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-          <span class="node-label">Segmenting</span>
+      <div class="proc-left">
+        <div class="proc-icon-wrap">
+          <svg id="procIconSvg" class="icon-scan" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></svg>
         </div>
-        <div class="trail-connector" data-between="0"></div>
-        <div class="trail-node" data-stage="slicing">
-          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-          <span class="node-label">Slicing</span>
+        <h2 class="proc-title" id="procTitle">Preparing your footage</h2>
+        <p class="proc-desc" id="procDesc" aria-live="polite">Getting things ready...</p>
+        <p class="proc-ticker" id="procTicker"></p>
+        <div class="truck-pill" id="truckPill" hidden><span id="truckCount">0</span>&nbsp;trucks found so far</div>
+
+        <div class="trail" id="trail">
+          <div class="trail-node" data-stage="segmentation">
+            <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+            <span class="node-label">Segmenting</span>
+          </div>
+          <div class="trail-connector" data-between="0"></div>
+          <div class="trail-node" data-stage="slicing">
+            <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+            <span class="node-label">Slicing</span>
+          </div>
+          <div class="trail-connector" data-between="1"></div>
+          <div class="trail-node" data-stage="detection">
+            <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
+            <span class="node-label">Detecting</span>
+          </div>
         </div>
-        <div class="trail-connector" data-between="1"></div>
-        <div class="trail-node" data-stage="detection">
-          <div class="node-dot"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg></div>
-          <span class="node-label">Detecting</span>
-        </div>
-      </div>
+      </div><!-- /.proc-left -->
 
+      <div class="detection-panel">
+        <div class="detection-panel-header"><span class="feed-dot"></span> Live Detections</div>
+        <div class="detection-strip" id="detectionStrip"></div>
+      </div><!-- /.detection-panel -->
 
-      <!-- Container where JS will inject annotated YOLO .mp4 videos -->
-      <div id="videoGallery" class="video-gallery" hidden>
-        <h3 class="gallery-title">Annotated Segments</h3>
-        <div class="video-grid" id="videoGrid"></div>
-      </div>
-    </div>
+    </div><!-- /.proc-left-col -->
 
-    <!-- === RIGHT COLUMN: Live Text Stream Feed === -->
     <div class="proc-right">
       <div class="feed-header">
         <div class="feed-title"><span class="feed-dot"></span> Live Activity Feed</div>
       </div>
-      <!-- Container where JS will append new log messages -->
       <div class="feed-list" id="feedList"></div>
-    </div>
-    
-  </div>
+    </div><!-- /.proc-right -->
+
+  </div><!-- /.processing-grid -->
 </main>
+
+
 
 <!-- ==========================================================================
      [STATE 3] DONE VIEW: Success Screen and Table
@@ -337,6 +340,7 @@
 
   <div class="done-actions">
     <button id="downloadBtn" class="btn-primary">Download Excel Results</button>
+    <button id="downloadVideosBtn" class="btn-ghost">Download Annotated Videos</button>
     <button id="resetBtnDone" class="btn-ghost">Process another video</button>
   </div>
 </main>
@@ -408,6 +412,10 @@
   let currentStage = null;
   let truckCount = 0;
   let eventSource = null;
+  let latestFeedText = "";
+  let tickerTimer = null;
+  const procTicker = document.getElementById('procTicker');
+  const detectionStrip = document.getElementById('detectionStrip');
 
   /**
    * Helper function to transition between the 4 main screen states (Idle, Processing, Done, Error)
@@ -453,6 +461,8 @@
    * Appends streamed text to the right-side Live Chat Panel.
    * Creates a new div, styles it based on the stage, and forces the scrollbar to the bottom.
    */
+
+  /*
   function appendFeedMessage(text, stageClass = "") {
     if (!text) return; // Prevent empty bubbles
     const item = document.createElement('div');
@@ -463,36 +473,78 @@
     // Auto-scroll logic: pushes the scroll position to the total height of the container
     feedList.scrollTop = feedList.scrollHeight; 
   }
+  */ 
 
-  /**
-   * Calls the backend API to fetch annotated .mp4 URLs, creates <video> tags, 
-   * and injects them into the left-panel grid.
-   */
-  async function loadAnnotatedVideos(jobId) {
-    const gallery = document.getElementById('videoGallery');
-    const grid = document.getElementById('videoGrid');
-    grid.innerHTML = ''; // Clear old videos
-
-    try {
-      const res = await fetch(`/api/videos/${jobId}`);
-      const data = await res.json();
-      
-      if (data.videos && data.videos.length > 0) {
-        gallery.hidden = false;
-        
-        // Loop through returned URLs and build video elements
-        data.videos.forEach(vidUrl => {
-          const videoEl = document.createElement('video');
-          videoEl.src = vidUrl;
-          videoEl.controls = true; // Show native browser controls (play/pause)
-          videoEl.muted = true;    // Mute by default to prevent sudden noise
-          grid.appendChild(videoEl);
-        });
-      }
-    } catch (err) {
-      console.error("Couldn't load annotated videos", err);
-    }
+  /*
+  function appendFeedMessage(text, stageClass = "", imgUrl = null) {
+  if (!text) return;
+  const item = document.createElement('div');
+  item.className = `feed-item ${stageClass}`;
+  if (imgUrl) {
+    item.innerHTML = `<img src="${imgUrl}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;">${text}`;
+  } else {
+    item.textContent = text;
   }
+  feedList.appendChild(item);
+  feedList.scrollTop = feedList.scrollHeight;
+  }
+  */
+
+
+  function appendFeedMessage(text, stageClass = "") {
+  if (!text) return;
+  latestFeedText = text;
+  const item = document.createElement('div');
+  item.className = `feed-item ${stageClass}`;
+  item.textContent = text;
+  feedList.appendChild(item);
+  feedList.scrollTop = feedList.scrollHeight;
+  }
+
+
+  function startTicker() {
+  if (tickerTimer) return;
+  tickerTimer = setInterval(() => {
+    if (!latestFeedText) return;
+    procTicker.style.opacity = 0;
+    setTimeout(() => {
+      procTicker.textContent = "› " + latestFeedText;
+      procTicker.style.opacity = 0.8;
+    }, 200);
+  }, 1400);
+  }
+
+  function stopTicker() {
+    clearInterval(tickerTimer);
+    tickerTimer = null;
+    procTicker.textContent = "";
+    procTicker.style.opacity = 0;
+  }
+
+  function addSegmentThumbnails(segId, urls) {
+    if (!urls || urls.length === 0) return;
+    const group = document.createElement('div');
+    group.style.marginBottom = '10px';
+
+    const label = document.createElement('div');
+    label.textContent = `Segment ${segId}`;
+    label.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;';
+    group.appendChild(label);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+    urls.forEach(url => {
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.cssText = 'width:120px;height:120px;object-fit:cover;border-radius:8px;border:1px solid var(--border);';
+      row.appendChild(img);
+    });
+    group.appendChild(row);
+    detectionStrip.appendChild(group);
+  }
+
+
+
 
   /**
    * Updates the center UI (icons, bold title, stage timeline dots)
@@ -645,13 +697,14 @@
     feedList.innerHTML = '';
     
     // Hide and clear the video gallery
-    document.getElementById('videoGallery').hidden = true;
-    document.getElementById('videoGrid').innerHTML = '';
+    detectionStrip.innerHTML = '';
+    stopTicker();
+    startTicker();
   }
 
   /**
-   * Connects to the SSE endpoint and parses streaming JSON events
-   */
+ * Connects to the SSE endpoint and parses streaming JSON events
+ */
   function connectStream(jobId) {
     if (eventSource) eventSource.close();
     eventSource = new EventSource(`/api/stream/${jobId}`);
@@ -661,37 +714,48 @@
       try { e = JSON.parse(event.data); } catch (err) { return; }
 
       // Handle normal stage progress updates
+      // (old commented-out block removed — it was dead code, safe to delete entirely)
+
       if (e.type === "stage_update") {
         if (e.stage) setStage(e.stage);
-        
-        if (e.text) {
-          swapText(procDesc, e.text); // Updates left panel subtitle
-          appendFeedMessage(e.text, e.stage || "");  // Appends to right panel chat log
+
+        if (e.meta && e.meta.truck_found) {
+          bumpTruckCount();
+          if (e.text) appendFeedMessage(e.text, e.stage || "");
+        } else if (e.meta && e.meta.segment_images) {
+          addSegmentThumbnails(e.meta.segment_images.seg_id, e.meta.segment_images.urls);
+        } else if (e.text) {
+          swapText(procDesc, e.text);
+          appendFeedMessage(e.text, e.stage || "");
         }
-        
-        // Check metadata for truck count increments
-        if (e.meta && e.meta.truck_found) bumpTruckCount();
-        
+
+        if (e.meta && e.meta.clip_progress) {
+          const { current, total } = e.meta.clip_progress;
+          swapText(procDesc, `Clip ${current} of ${total}`);
+        }
+      
+
       // Handle the end of a specific pipeline step (Segmentation -> Slicing -> Detection)
       } else if (e.type === "stage_complete") {
         markStageComplete(e.stage);
         appendFeedMessage(`Completed ${e.stage} stage.`, e.stage || "");
-        
+
       // Handle the complete end of the entire job
       } else if (e.type === "done") {
         eventSource.close();
         appendFeedMessage("Pipeline execution complete.", "done");
-        
-        // Fetch and embed the finished annotated .mp4 clips
-        loadAnnotatedVideos(currentJobId); 
 
+  
         const word = truckCount === 1 ? "truck" : "trucks";
         doneSummary.textContent = truckCount > 0
           ? `Found ${truckCount} ${word} in your footage — timestamps, crops, and plate images are all logged.`
           : `Scan complete — no trucks were found in this footage.`;
-        
-        showView(viewDone);
-        loadPreviewTable(currentJobId); // Fetch and build the Excel preview
+
+        setTimeout(() => {
+          showView(viewDone);
+          loadPreviewTable(currentJobId);  // Fetch and build the Excel preview
+        }, 10000);
+
         
       // Handle fatal backend errors
       } else if (e.type === "error") {
@@ -705,6 +769,10 @@
 
   function downloadExcel() {
     window.location.href = `/api/download/${currentJobId}`;
+  }
+
+  function downloadVideos() {
+  window.location.href = `/api/download-videos/${currentJobId}`;
   }
 
   function resetToIdle() {
@@ -721,6 +789,7 @@
   // --- BUTTON WIRING ---
   uploadBtn.addEventListener('click', uploadVideo);
   downloadBtn.addEventListener('click', downloadExcel);
+  document.getElementById('downloadVideosBtn').addEventListener('click', downloadVideos);
   document.getElementById('resetBtnDone').addEventListener('click', resetToIdle);
   document.getElementById('resetBtnError').addEventListener('click', resetToIdle);
 </script>
