@@ -16,7 +16,13 @@ import numpy as np
 import openvino as ov
 import nncf
 
-FP32_IR_PATH = os.path.join("weights", "yolox_small.xml")
+# CHANGED: yolox_small.xml was being saved via ov.save_model() with no
+# compress_to_fp16 override, which defaults to True — so that file was
+# actually FP16-compressed, not true FP32. Quantizing from it meant your
+# INT8 model was built on top of an already-lossy FP16 baseline, not FP32.
+# yolox_small_fp32.xml (from create_model_variants.py, compress_to_fp16=False)
+# is the correct true-FP32 source to quantize from.
+FP32_IR_PATH = os.path.join("weights", "yolox_small_fp32.xml")
 INT8_IR_PATH = os.path.join("weights", "yolox_small_int8.xml")
 CALIBRATION_DATA_PATH = "calibration_frames.npy"
 
@@ -24,9 +30,10 @@ CALIBRATION_DATA_PATH = "calibration_frames.npy"
 def main():
     if not os.path.exists(FP32_IR_PATH):
         raise FileNotFoundError(
-            f"{FP32_IR_PATH} not found — run step_3_yoloXs_images.py once first "
-            f"(with MODEL_PRECISION='FP32') to generate the base IR model."
+            f"{FP32_IR_PATH} not found — run create_model_variants.py first "
+            f"to generate the true FP32 and FP16 IR files."
         )
+    
     if not os.path.exists(CALIBRATION_DATA_PATH):
         raise FileNotFoundError(
             f"{CALIBRATION_DATA_PATH} not found — run build_calibration_data.py first."

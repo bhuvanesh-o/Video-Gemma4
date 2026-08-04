@@ -39,6 +39,8 @@ from paddleocr import TextDetection, TextRecognition   # was: from paddleocr imp
 
 from progress import emit
 
+from functools import lru_cache
+
 # Lazy-loaded singleton — PaddleOCR's detector+recognizer model loads once per
 # process, reused across every compile_segment_database() call for the
 # lifetime of the job (and across jobs, if they share a process).
@@ -130,10 +132,28 @@ def ensure_yolox_weights(onnx_path, weights_url, job_id=None):
         urllib.request.urlretrieve(weights_url, onnx_path)
         emit(f"✅ Saved weights to {onnx_path}", job_id=job_id,
              stage="detection", ui_message="Detection model ready.")
+
+
+
+@lru_cache(maxsize=8)
+def get_compiled_model(model_path, device, performance_hint):
+    """
+    Compiles once per (model_path, device, performance_hint) combo, then
+    reuses the CompiledModel object for every job after that — as long as
+    the FastAPI process stays running. Not keyed on job_id on purpose:
+    including job_id here would defeat the whole point, since every job
+    has a different one and would force a fresh compile every time.
+    A CompiledModel is safe to call .create_infer_request() on from
+    multiple threads at once — that's what makes this safe under
+    concurrent uploads (BackgroundTasks runs each job in its own thread).
+    """
+    core = ov.Core()
+    return core.compile_model(model_path, device, {"PERFORMANCE_HINT": performance_hint})
+
 # ==============================================================================
 # ── load_yolox_session ─────────────────────────────────────────────────────────
 # ==============================================================================
-def load_yolox_session(model_path, job_id=None):
+def load_yolox_session(model_path, device="CPU", performance_hint="LATENCY", job_id=None):
     """
     Initializes an OpenVINO CPU inference session from a model file.
 
@@ -145,29 +165,29 @@ def load_yolox_session(model_path, job_id=None):
     created ONCE here and reused across every frame in run_detection_tracking —
     do not recreate it per frame.
     """
-    core = ov.Core()
     ext = os.path.splitext(model_path)[1].lower()
 
     if ext == ".xml":
+        final_ir_path = model_path
         emit(f"⚡ Loading OpenVINO IR directly: {os.path.basename(model_path)}", job_id=job_id,
              stage="detection", ui_message="Loading detection model...")
-        model = core.read_model(model_path)
 
     elif ext == ".onnx":
         ir_path = os.path.splitext(model_path)[0] + ".xml"
+        final_ir_path = ir_path
         if os.path.exists(ir_path):
-            emit("⚡ Loading cached FP32 OpenVINO IR (skips ONNX conversion)...", job_id=job_id,
+            emit("⚡ Found cached OpenVINO IR (skips ONNX conversion)...", job_id=job_id,
                  stage="detection", ui_message="Loading detection model...")
-            model = core.read_model(ir_path)
         else:
             emit("🔄 First run — converting YOLOX-S ONNX to OpenVINO IR (one-time cost)...", job_id=job_id,
                  stage="detection", ui_message="Preparing detection model for the first time...")
+            core = ov.Core()
             model = core.read_model(model_path)
             ov.save_model(model, ir_path)  # cache it — future runs load the .xml branch above
     else:
         raise ValueError(f"Unsupported model file type: {model_path}")
 
-    compiled_model = core.compile_model(model, "CPU")
+    compiled_model = get_compiled_model(final_ir_path, device, performance_hint)
     input_layer = compiled_model.input(0)
     output_layer = compiled_model.output(0)
     infer_request = compiled_model.create_infer_request()

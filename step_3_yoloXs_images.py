@@ -59,7 +59,7 @@ from storage import path_for, dir_for
 from progress import emit
 
 
-def main(job_id):
+def main(job_id, model_precision = None):
     # ==============================================================================
     # ── SECTION 1: MASTER TUNING PARAMETERS & PATHS CONFIGURATION ─────────────────
     # ==============================================================================
@@ -81,6 +81,7 @@ def main(job_id):
     # ⚙️ MODEL PRECISION SWITCH — toggle between FP32 (baseline) and INT8 (faster,
     # small accuracy tradeoff). INT8 requires weights/yolox_small_int8.xml to
     # already exist — run build_calibration_data.py + quantize_int8.py first.
+
     MODEL_PRECISION = "INT8"   # "FP32" or "INT8"
 
     MODEL_PATH = INT8_PATH if MODEL_PRECISION == "INT8" else ONNX_PATH
@@ -237,8 +238,9 @@ def main(job_id):
     # ==============================================================================
     emit(f"🚀 Loading YOLOX-S via OpenVINO ({MODEL_PRECISION}, CPU)...", job_id=job_id,
          stage="detection", ui_message="Loading the truck detection model...")
-    infer_request, input_layer, output_layer = load_yolox_session(MODEL_PATH, job_id=job_id)
-
+    OPENVINO_DEVICE = "CPU"
+    PERFORMANCE_HINT = "LATENCY"
+    infer_request, input_layer, output_layer = load_yolox_session(MODEL_PATH, device=OPENVINO_DEVICE, performance_hint=PERFORMANCE_HINT, job_id=job_id)
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
     # ==============================================================================
