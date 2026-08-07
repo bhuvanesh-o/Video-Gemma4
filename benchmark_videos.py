@@ -43,7 +43,7 @@ def count_trucks_found(job_id):
     return len(df)
 
 
-def run_one_video(video_path, keep_outputs=False):
+def run_one_video(video_path, keep_outputs=False, precision="INT8", hint="LATENCY"):
     """
     Runs the full pipeline on a single video file and returns a dict of
     metrics for that run. video_path is a local file OUTSIDE any job folder —
@@ -84,7 +84,7 @@ def run_one_video(video_path, keep_outputs=False):
     stage_times["slicing"] = time.time() - t0
 
     t0 = time.time()
-    step_3_yoloXs_images.main(job_id=job_id)
+    step_3_yoloXs_images.main(job_id=job_id, model_precision=precision, performance_hint=hint)
     stage_times["detection"] = time.time() - t0
 
     total_time = time.time() - overall_start
@@ -94,6 +94,8 @@ def run_one_video(video_path, keep_outputs=False):
 
     result = {
         "video_name": video_name,
+        "model_precision": precision,
+        "performance_hint": hint,
         "duration_sec": round(raw_info["duration"], 2),
         "resolution": f"{raw_info['width']}x{raw_info['height']}",
         "time_segmentation_sec": round(stage_times["segmentation"], 2),
@@ -117,8 +119,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--video_dir", required=True, help="Folder containing test videos")
     parser.add_argument("--keep_outputs", action="store_true", help="Don't delete job folders after each run")
-    parser.add_argument("--out_csv", default="benchmark_results.csv")
+    parser.add_argument("--precision", choices=["FP32", "FP16", "INT8"], default="INT8")
+    parser.add_argument("--hint", choices=["LATENCY", "THROUGHPUT"], default="LATENCY")
+    parser.add_argument("--out_csv", default=None)
     args = parser.parse_args()
+    if args.out_csv is None:
+        args.out_csv = f"benchmark_results_{args.precision}.csv"   # auto-name so runs never overwrite each other
 
     video_extensions = (".mp4", ".avi", ".mov", ".mkv")
     video_files = sorted(
@@ -135,7 +141,7 @@ def main():
     for idx, video_name in enumerate(video_files, 1):
         print(f"[{idx}/{len(video_files)}] Processing: {video_name}")
         video_path = os.path.join(args.video_dir, video_name)
-        result = run_one_video(video_path, keep_outputs=args.keep_outputs)
+        result = run_one_video(video_path, keep_outputs=args.keep_outputs, precision=args.precision, hint=args.hint)
         if result:
             all_results.append(result)
             print(f"  ✅ Total: {result['time_total_sec']}s | "
@@ -156,3 +162,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

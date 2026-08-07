@@ -135,19 +135,24 @@ def ensure_yolox_weights(onnx_path, weights_url, job_id=None):
 
 
 
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "openvino_cache")
+
 @lru_cache(maxsize=8)
 def get_compiled_model(model_path, device, performance_hint):
     """
     Compiles once per (model_path, device, performance_hint) combo, then
     reuses the CompiledModel object for every job after that — as long as
-    the FastAPI process stays running. Not keyed on job_id on purpose:
-    including job_id here would defeat the whole point, since every job
-    has a different one and would force a fresh compile every time.
-    A CompiledModel is safe to call .create_infer_request() on from
-    multiple threads at once — that's what makes this safe under
-    concurrent uploads (BackgroundTasks runs each job in its own thread).
+    the FastAPI process stays running (process-level reuse, via lru_cache).
+
+    CACHE_DIR adds a SEPARATE layer on top: OpenVINO writes the compiled,
+    device-lowered blob to disk here. That's what survives a server
+    restart — lru_cache only lives as long as this Python process does,
+    so without CACHE_DIR, restarting the server means paying full
+    compile cost again on the very next job, even though nothing changed.
     """
+    os.makedirs(CACHE_DIR, exist_ok=True)
     core = ov.Core()
+    core.set_property({"CACHE_DIR": CACHE_DIR})
     return core.compile_model(model_path, device, {"PERFORMANCE_HINT": performance_hint})
 
 # ==============================================================================

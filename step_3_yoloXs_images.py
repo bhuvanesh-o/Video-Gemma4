@@ -59,7 +59,7 @@ from storage import path_for, dir_for
 from progress import emit
 
 
-def main(job_id, model_precision = None):
+def main(job_id, model_precision = None, performance_hint=None):
     # ==============================================================================
     # ── SECTION 1: MASTER TUNING PARAMETERS & PATHS CONFIGURATION ─────────────────
     # ==============================================================================
@@ -239,7 +239,7 @@ def main(job_id, model_precision = None):
     emit(f"🚀 Loading YOLOX-S via OpenVINO ({MODEL_PRECISION}, CPU)...", job_id=job_id,
          stage="detection", ui_message="Loading the truck detection model...")
     OPENVINO_DEVICE = "CPU"
-    PERFORMANCE_HINT = "LATENCY"
+    PERFORMANCE_HINT = performance_hint or "LATENCY"   # 👈 THIS is the switch — change "LATENCY" to "THROUGHPUT" here, or pass it in from the caller
     infer_request, input_layer, output_layer = load_yolox_session(MODEL_PATH, device=OPENVINO_DEVICE, performance_hint=PERFORMANCE_HINT, job_id=job_id)
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
