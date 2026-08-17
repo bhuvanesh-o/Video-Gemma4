@@ -16,7 +16,7 @@ import video_preprocess
 import step_1_segmentation
 import step_2_video_slice_excel_timestamp
 import step_3_yoloXs_images
-
+import step_4_prompt_document
 
 
 # REFACTOR NOTE (APIRouter split): this used to live directly on the FastAPI()
@@ -46,7 +46,11 @@ def run_pipeline(job_id: str):
         step_3_yoloXs_images.main(job_id=job_id)
         progress.emit_stage_complete("detection", job_id)
 
+        step_4_prompt_document.main(job_id=job_id)          
+        progress.emit_stage_complete("describing", job_id)   
+
         progress.emit_done(job_id)
+        
     except Exception as e:
         progress.emit_error(str(e), job_id)
 

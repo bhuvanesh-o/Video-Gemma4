@@ -47,6 +47,9 @@ import pandas as pd
 import cv2
 import subprocess
 
+import openvino.properties as props
+
+
 from step_3_functions_yoloXs_images import (
     ensure_yolox_weights,
     load_yolox_session,
@@ -240,7 +243,50 @@ def main(job_id, model_precision = None, performance_hint=None):
          stage="detection", ui_message="Loading the truck detection model...")
     OPENVINO_DEVICE = "CPU"
     PERFORMANCE_HINT = performance_hint or "LATENCY"   # 👈 THIS is the switch — change "LATENCY" to "THROUGHPUT" here, or pass it in from the caller
-    infer_request, input_layer, output_layer = load_yolox_session(MODEL_PATH, device=OPENVINO_DEVICE, performance_hint=PERFORMANCE_HINT, job_id=job_id)
+
+
+    def check_optimal_requests(compiled_model, job_id=None):
+            num = compiled_model.get_property(props.optimal_number_of_infer_requests)
+            emit(f"⚙️ OpenVINO recommends {num} infer requests for this model/device/hint combo.",
+                job_id=job_id, stage="detection", ui_message="")
+            return num
+
+    
+    compiled_model, input_layer, output_layer = load_yolox_session(MODEL_PATH, device=OPENVINO_DEVICE, performance_hint=PERFORMANCE_HINT, job_id=job_id)
+
+
+    check_optimal_requests(compiled_model, job_id=job_id)  # run once, note the number, can remove after
+
+    # Two infer requests, created FRESH for this job (never cached, never
+    # shared across jobs) — this is what #11's isolation requirement means
+    # concretely. Only compiled_model above is shared, via get_compiled_model's
+    # lru_cache from #6.
+
+    '''
+    infer_request_a = compiled_model.create_infer_request()
+    infer_request_b = compiled_model.create_infer_request()
+    '''
+
+
+    NUM_INFER_REQUESTS = 4
+
+    infer_requests = [
+        compiled_model.create_infer_request()
+        for _ in range(NUM_INFER_REQUESTS)
+    ]
+
+
+
+
+    # Add this right after get_compiled_model() returns, anywhere convenient
+    # for a one-off check — e.g. temporarily inside load_yolox_session(), or
+    # as a tiny standalone script.
+
+    
+
+
+
+
     # ==============================================================================
     # ── SECTION 4: MASTER TIMELINE EXECUTION LOOP ─────────────────────────────────
     # ==============================================================================
@@ -280,14 +326,14 @@ def main(job_id, model_precision = None, performance_hint=None):
         # inside the per-segment "for idx, row in df_times.iterrows():" loop, replace the
         # run_detection_tracking(...) call with:
 
-        active_state_buffer = run_detection_tracking(
-            local_video_path, local_out_vid, t_start,
-            infer_request, input_layer, output_layer, INPUT_SIZE, TRUCK_CLASS_ID,
-            DETECTION_SCORE_THR, DETECTION_NMS_THR,
-            TRACKER_MAX_DISAPPEARED, TRACKER_DISTANCE_THR,
-            COLLISION_STD_GUARD, MAX_CANDIDATE_FRAMES,
-            SIZE_SWEET_SPOT_MIN, SIZE_SWEET_SPOT_MAX, RECEDE_TOLERANCE, MIN_CANDIDATE_SPACING_SECONDS,
-            job_id=job_id
+        active_state_buffer, segment_timing = run_detection_tracking(
+          local_video_path, local_out_vid, t_start,
+          infer_requests, input_layer, output_layer, INPUT_SIZE, TRUCK_CLASS_ID,
+          DETECTION_SCORE_THR, DETECTION_NMS_THR,
+          TRACKER_MAX_DISAPPEARED, TRACKER_DISTANCE_THR,
+          COLLISION_STD_GUARD, MAX_CANDIDATE_FRAMES,
+          SIZE_SWEET_SPOT_MIN, SIZE_SWEET_SPOT_MAX, RECEDE_TOLERANCE, MIN_CANDIDATE_SPACING_SECONDS,
+          job_id=job_id
         )
 
         

@@ -228,11 +228,174 @@
   @keyframes scan-sweep { 0%, 100% { transform: translateX(-8px); opacity: 0.4; } 50% { transform: translateX(8px); opacity: 1; } }
   .icon-scan .sweep { animation: scan-sweep 1.6s ease-in-out infinite; transform-origin: center; }
 
+  /* ==========================================================================
+   8. RESULTS TABLE — WIDE LANDSCAPE VIEW
+   ========================================================================== */
+
+  /* Override the normal 720px .view width ONLY for the final results screen */
+  .view-done {
+    width: 100%;
+    max-width: 1600px;
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+
+
+  /* Full-width container for the registry */
+  .results-table-wrap {
+    width: 100%;
+    max-width: none;
+    overflow-x: auto;
+    margin: 28px 0 32px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface-solid);
+  }
+
+
+  /* Actual table */
+  .results-table {
+    width: 100%;
+    min-width: 1450px;
+    border-collapse: collapse;
+    table-layout: auto;
+    font-size: 13px;
+  }
+
+
+  /* Headers */
+  .results-table th {
+    text-align: left;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-weight: 600;
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+
+
+  /* Normal cells */
+  .results-table td {
+    padding: 16px;
+    border-bottom: 1px solid var(--border-soft);
+    vertical-align: middle;
+    line-height: 1.45;
+  }
+
+
+  /* Vehicle ID */
+  .results-table th:nth-child(1),
+  .results-table td:nth-child(1) {
+    min-width: 130px;
+    white-space: nowrap;
+  }
+
+
+  /* In Time */
+  .results-table th:nth-child(2),
+  .results-table td:nth-child(2) {
+    min-width: 85px;
+  }
+
+
+  /* Out Time */
+  .results-table th:nth-child(3),
+  .results-table td:nth-child(3) {
+    min-width: 90px;
+  }
+
+
+  /* Truck Type */
+  .results-table th:nth-child(4),
+  .results-table td:nth-child(4) {
+    min-width: 150px;
+  }
+
+
+  /* Tyres */
+  .results-table th:nth-child(5),
+  .results-table td:nth-child(5) {
+    min-width: 90px;
+  }
+
+
+  /* Plate image */
+  .results-table th:nth-child(6),
+  .results-table td:nth-child(6) {
+    min-width: 180px;
+    text-align: center;
+  }
+
+
+  /* Truck image */
+  .results-table th:nth-child(7),
+  .results-table td:nth-child(7) {
+    min-width: 220px;
+    text-align: center;
+  }
+
+
+  /* E2B analysis */
+  .results-table th:nth-child(8),
+  .results-table td:nth-child(8) {
+    min-width: 430px;
+    width: 430px;
+    text-align: left;
+    vertical-align: top;
+  }
+
+
+  /* Vehicle thumbnails */
+  .results-table .plate-preview {
+    width: 150px;
+    height: 70px;
+    object-fit: contain;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #080A0F;
+  }
+
+
+  .results-table .truck-preview {
+    width: 190px;
+    height: 110px;
+    object-fit: contain;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: #080A0F;
+  }
+
+
+  /* Nice scrollbar for wide table */
+  .results-table-wrap::-webkit-scrollbar {
+    height: 7px;
+  }
+
+  .results-table-wrap::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .results-table-wrap::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 10px;
+  }
+
+
+  /* Slight row highlight */
+  .results-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.018);
+  }
+
+
   /* RESPONSIVE DESIGN: Stack the 2 columns into 1 column on smaller screens */
   @media (max-width: 820px) { 
     .processing-grid { grid-template-columns: 1fr; } 
     .proc-right { height: 320px; } 
   }
+
+
 </style>
 </head>
 <body>
@@ -336,7 +499,8 @@
   <p id="doneSummary">Your vehicle registry has been compiled.</p>
 
 
-  <div id="resultsTableWrap" style="width:100%; max-width:640px; overflow-x:auto; margin-bottom:24px;"></div>
+  <!-- <div id="resultsTableWrap" style="width:100%; max-width:640px; overflow-x:auto; margin-bottom:24px;"></div> -->
+  <div id="resultsTableWrap" class="results-table-wrap"></div>
 
   <div class="done-actions">
     <button id="downloadBtn" class="btn-primary">Download Excel Results</button>
@@ -614,12 +778,14 @@
         return;
       }
 
-      let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr>';
+      //let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr>';
+      let html = '<table class="results-table"><thead><tr>';
       data.columns.forEach(c => {
-        html += `<th style="text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text-muted);">${c}</th>`;
+        //html += `<th style="text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); color:var(--text-muted);">${c}</th>`;
+        html += `<th>${c}</th>`;
       });
       html += '</tr></thead><tbody>';
-
+      /*
       data.rows.forEach(row => {
         html += '<tr>';
         data.columns.forEach(col => {
@@ -638,6 +804,84 @@
         });
         html += '</tr>';
       });
+      */
+
+      /*
+      data.rows.forEach(row => {
+        html += '<tr>';
+        data.columns.forEach(col => {
+          const val = row[col];
+          let display;
+          let cellStyle = "padding:6px 10px; border-bottom:1px solid var(--border-soft);";
+
+          if (col === "Plate File" || col === "Truck File") {
+            display = val
+              ? `<a href="${val}" target="_blank"><img src="${val}" style="height:36px; border-radius:4px; vertical-align:middle;"></a>`
+              : '—';
+          } else if (col === "E2B Analysis") {
+            // Long readable text — wrap instead of stretching the row, cap width so
+            // the table stays scannable next to the shorter columns.
+            display = val ?? '—';
+            cellStyle += " white-space:normal; max-width:320px; font-size:12px; line-height:1.4;";
+          } else {
+            display = val ?? '—';
+          }
+          html += `<td style="${cellStyle}">${display}</td>`;
+        });
+        html += '</tr>';
+      });
+      */
+
+      data.rows.forEach(row => {
+
+      html += '<tr>';
+
+      data.columns.forEach(col => {
+
+        const val = row[col];
+        let display = val ?? '—';
+
+        // Plate crop
+        if (col === "Plate File") {
+
+          display = val
+            ? `
+              <a href="${val}" target="_blank">
+                <img
+                  src="${val}"
+                  class="plate-preview"
+                  alt="Plate crop"
+                >
+              </a>
+            `
+            : '—';
+        }
+
+        // Full truck crop
+        else if (col === "Truck File") {
+
+          display = val
+            ? `
+              <a href="${val}" target="_blank">
+                <img
+                  src="${val}"
+                  class="truck-preview"
+                  alt="Truck crop"
+                >
+              </a>
+            `
+            : '—';
+        }
+
+        // E2B description
+        else if (col === "E2B Analysis") {
+          display = val ?? '—';
+        }
+
+        html += `<td>${display}</td>`;
+      });
+      html += '</tr>';
+    });
 
       html += '</tbody></table>';
       wrap.innerHTML = html;

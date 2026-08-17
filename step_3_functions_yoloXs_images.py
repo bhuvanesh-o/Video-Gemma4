@@ -35,11 +35,15 @@ import urllib.request
 # import onnxruntime as ort
 import openvino as ov          # was: import onnxruntime as ort
 
+import time
+
 from paddleocr import TextDetection, TextRecognition   # was: from paddleocr import PaddleOCR
 
 from progress import emit
 
 from functools import lru_cache
+
+from collections import deque
 
 # Lazy-loaded singleton — PaddleOCR's detector+recognizer model loads once per
 # process, reused across every compile_segment_database() call for the
@@ -197,7 +201,7 @@ def load_yolox_session(model_path, device="CPU", performance_hint="LATENCY", job
     output_layer = compiled_model.output(0)
     infer_request = compiled_model.create_infer_request()
 
-    return infer_request, input_layer, output_layer
+    return compiled_model, input_layer, output_layer
 # ==============================================================================
 # ── preprocess ─────────────────────────────────────────────────────────────────
 # ==============================================================================
@@ -385,9 +389,183 @@ class LightweightTracker:
             if self.tracks[tid]["disappeared"] > self.max_disappeared:
                 del self.tracks[tid]
         return active_tracks
+
+
+
+
+
 # ==============================================================================
 # ── run_detection_tracking ─────────────────────────────────────────────────────
 # ==============================================================================
+
+
+def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_requests,
+                            input_layer, output_layer,
+                            input_size, truck_class_id, detection_score_thr, detection_nms_thr,
+                            tracker_max_disappeared, tracker_distance_thr, collision_std_guard,
+                            max_candidate_frames, size_sweet_spot_min, size_sweet_spot_max,
+                            recede_tolerance, min_candidate_spacing_seconds, job_id=None):
+    """
+    N-DEEP ASYNC PIPELINE (generalized from the 2-request double buffer).
+    infer_requests can be a list of ANY length (2, 4, 8...) — this function
+    doesn't hardcode a count.
+
+    ORDER GUARANTEE: in_flight is a deque holding (frame_id, frame, slot_idx)
+    in the exact order frames were submitted. The main loop ALWAYS pops from
+    the LEFT (oldest submission first) and postprocesses/tracks it before
+    moving to the next. A slot is only refilled with a NEW frame right after
+    its previous frame has been drained — so at any moment, in_flight holds
+    at most N frames, always in strictly increasing frame_id order. The
+    tracker therefore still receives frames 0, 1, 2, 3... in exact
+    chronological order, regardless of how many requests are pipelined.
+
+    PER-JOB ISOLATION: infer_requests is created fresh per job by the
+    caller, never cached/shared across jobs — only the underlying
+    CompiledModel (via get_compiled_model's lru_cache) is shared.
+    """
+    cap = cv2.VideoCapture(local_video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {local_video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    out_writer = cv2.VideoWriter(local_out_vid, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+    if not out_writer.isOpened():
+        cap.release()
+        raise RuntimeError(f"Could not open output video for writing: {local_out_vid}")
+
+    tracker = LightweightTracker(max_disappeared=tracker_max_disappeared, distance_threshold=tracker_distance_thr)
+    active_state_buffer = {}
+    min_spacing_frames = max(1, int(fps * min_candidate_spacing_seconds))
+    num_requests = len(infer_requests)
+    ratio_for_frame = {}
+
+    segment_start = time.perf_counter()
+    total_frames_processed = 0
+    total_wait_sec = 0.0
+
+    def postprocess_and_track(raw_out, frame, frame_id, absolute_time):
+        decoded = decode_outputs(raw_out, input_size)[0]
+        truck_boxes = get_truck_boxes(decoded, ratio_for_frame[frame_id], w, h, score_thr=detection_score_thr,
+                                       nms_thr=detection_nms_thr, truck_class_id=truck_class_id)
+        tracked_trucks = tracker.update(truck_boxes)
+
+        for track_id, box in tracked_trucks.items():
+            x1, y1, x2, y2 = box
+            width = x2 - x1
+            height = y2 - y1
+            aspect_ratio = width / max(height, 1)
+            candidate_crop = frame[y1:y2, x1:x2].copy()
+
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(frame, f"TRUCK ID: {track_id}", (x1, max(y1 - 10, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+            if track_id not in active_state_buffer:
+                active_state_buffer[track_id] = {
+                    "in_time": absolute_time, "out_time": absolute_time,
+                    "top_candidates": [], "peak_width": 0, "receding": False,
+                    "aspect_ratios": [], "widths": [], "frames_tracked": 0,
+                    "first_box": [x1, y1, x2, y2], "last_box": [x1, y1, x2, y2]
+                }
+            profile = active_state_buffer[track_id]
+            profile["out_time"] = absolute_time
+            profile["frames_tracked"] += 1
+            profile["last_box"] = [x1, y1, x2, y2]
+            profile["widths"].append(width)
+            recent_widths = profile["widths"][-3:]
+            is_collision = len(recent_widths) == 3 and np.std(recent_widths) > collision_std_guard
+
+            if width > profile["peak_width"]:
+                profile["peak_width"] = width
+            elif profile["peak_width"] > 0 and width < profile["peak_width"] * recede_tolerance:
+                profile["receding"] = True
+
+            if not is_collision:
+                profile["aspect_ratios"].append(aspect_ratio)
+                size_ratio = (width * height) / (w * h)
+                within_sweet_spot = size_sweet_spot_min <= size_ratio <= size_sweet_spot_max
+                eligible_for_candidacy = (not profile["receding"]) and within_sweet_spot
+
+                if eligible_for_candidacy and candidate_crop.size > 0:
+                    score = compute_frame_quality_score(
+                        candidate_crop, x1, y1, x2, y2, w, h,
+                        size_sweet_spot_min, size_sweet_spot_max
+                    )
+                    new_candidate = {"score": score, "crop": candidate_crop, "frame_index": frame_id}
+                    insert_spaced_candidate(profile["top_candidates"], new_candidate,
+                                             max_candidate_frames, min_spacing_frames)
+
+        out_writer.write(frame)
+
+    try:
+        in_flight = deque()  # (frame_id, frame, slot_idx), oldest submission first
+        next_frame_id = 0
+        video_exhausted = False
+
+        # ── Prime the pipeline: submit up to num_requests frames ahead ──────
+        for slot in range(num_requests):
+            ret, frame = cap.read()
+            if not ret:
+                video_exhausted = True
+                break
+            img, ratio = preprocess(frame, input_size)
+            ratio_for_frame[next_frame_id] = ratio
+            infer_requests[slot].start_async({input_layer: img[None, :, :, :]})
+            in_flight.append((next_frame_id, frame, slot))
+            next_frame_id += 1
+
+        # ── Main loop: drain oldest, refill its slot, repeat ────────────────
+        while in_flight:
+            frame_id, frame, slot = in_flight.popleft()
+
+            t_wait = time.perf_counter()
+            infer_requests[slot].wait()
+            total_wait_sec += time.perf_counter() - t_wait
+
+            raw_out = infer_requests[slot].get_tensor(output_layer).data.copy()
+
+            # Immediately refill THIS slot with the next unread frame, if any —
+            # keeps up to num_requests frames pipelined at all times.
+            if not video_exhausted:
+                ret, new_frame = cap.read()
+                if ret:
+                    new_img, new_ratio = preprocess(new_frame, input_size)
+                    ratio_for_frame[next_frame_id] = new_ratio
+                    infer_requests[slot].start_async({input_layer: new_img[None, :, :, :]})
+                    in_flight.append((next_frame_id, new_frame, slot))
+                    next_frame_id += 1
+                else:
+                    video_exhausted = True
+
+            current_absolute_time = t_start + (frame_id / fps)
+            postprocess_and_track(raw_out, frame, frame_id, current_absolute_time)
+            total_frames_processed += 1
+            del ratio_for_frame[frame_id]
+
+    finally:
+        cap.release()
+        out_writer.release()
+
+    total_time = time.perf_counter() - segment_start
+    effective_fps = total_frames_processed / total_time if total_time > 0 else 0.0
+
+    emit(
+        f"      ⏱️ Segment ({num_requests}-deep async): {total_time:.2f}s | {total_frames_processed} frames | "
+        f"{effective_fps:.1f} fps | wait: {total_wait_sec:.2f}s ({total_wait_sec/total_time*100:.0f}% of total)"
+        if total_time > 0 else f"      ⏱️ Segment ({num_requests}-deep async): 0 frames processed",
+        job_id=job_id, stage="detection", ui_message=""
+    )
+
+    return active_state_buffer, {
+        "total_sec": total_time,
+        "frames": total_frames_processed,
+        "effective_fps": effective_fps,
+        "wait_sec": total_wait_sec,
+    }
+
+
+'''
 def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_request, input_layer, output_layer,
                             input_size, truck_class_id, detection_score_thr, detection_nms_thr,
                             tracker_max_disappeared, tracker_distance_thr, collision_std_guard,
@@ -416,25 +594,42 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
     active_state_buffer = {}
     frame_count = 0
 
+    # NEW: per-stage timing accumulators, reset for this segment
+    timing = {"read": 0.0, "preprocess": 0.0, "infer": 0.0, "track": 0.0, "draw_write": 0.0}
+
+
     # min_candidate_spacing_seconds -> frames, so the same config value behaves
     # consistently across videos with different frame rates.
     min_spacing_frames = max(1, int(fps * min_candidate_spacing_seconds))
 
+
+
     while cap.isOpened():
+        t0 = time.perf_counter()
         ret, frame = cap.read()
+        t1 = time.perf_counter()
+        timing["read"] += (t1 - t0)
         if not ret:
             break
 
         current_absolute_time = t_start + (frame_count / fps)
         img, ratio = preprocess(frame, input_size)
+        t2 = time.perf_counter()
+        timing["preprocess"] += (t2 - t1)
 
         infer_request.infer({input_layer: img[None, :, :, :]})
         raw_out = infer_request.get_output_tensor(output_layer.index).data.copy()
         decoded = decode_outputs(raw_out, input_size)[0]
+        t3 = time.perf_counter()
+        timing["infer"] += (t3 - t2)
 
         truck_boxes = get_truck_boxes(decoded, ratio, w, h, score_thr=detection_score_thr,
                                        nms_thr=detection_nms_thr, truck_class_id=truck_class_id)
         tracked_trucks = tracker.update(truck_boxes)
+        t4 = time.perf_counter()
+        timing["track"] += (t4 - t3)
+
+
 
         for track_id, box in tracked_trucks.items():
             x1, y1, x2, y2 = box
@@ -468,12 +663,7 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
             recent_widths = profile["widths"][-3:]
             is_collision = len(recent_widths) == 3 and np.std(recent_widths) > collision_std_guard
 
-            '''
-            # TEMP DEBUG
-            size_ratio_dbg = (width * height) / (w * h)
-            print(f"[DBG] t={current_absolute_time:.1f}s id={track_id} w={width} size_ratio={size_ratio_dbg:.3f} "
-                  f"peak={profile['peak_width']} receding={profile['receding']} collision={is_collision}")
-            '''
+
 
             # Peak-width / receding tracking — this is what detects "has the
             # truck passed its closest point and started moving away."
@@ -505,7 +695,27 @@ def run_detection_tracking(local_video_path, local_out_vid, t_start, infer_reque
 
     cap.release()
     out_writer.release()
-    return active_state_buffer
+    #return active_state_buffer
+
+    # NEW: log the breakdown once per segment, so you can see where time actually went
+    total = sum(timing.values()) or 1e-9
+    emit(
+        f"      ⏱️ Segment timing -> read: {timing['read']:.2f}s ({timing['read']/total*100:.0f}%) | "
+        f"preprocess: {timing['preprocess']:.2f}s ({timing['preprocess']/total*100:.0f}%) | "
+        f"infer: {timing['infer']:.2f}s ({timing['infer']/total*100:.0f}%) | "
+        f"track: {timing['track']:.2f}s ({timing['track']/total*100:.0f}%) | "
+        f"draw/write: {timing['draw_write']:.2f}s ({timing['draw_write']/total*100:.0f}%)",
+        job_id=job_id, stage="detection", ui_message=""
+    )
+
+    return active_state_buffer, timing  # CHANGED: now also returns the timing dict
+
+'''
+
+
+
+
+
 
 # ==============================================================================
 # ── merge_broken_tracks ────────────────────────────────────────────────────────
