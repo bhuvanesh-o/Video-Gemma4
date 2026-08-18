@@ -873,15 +873,39 @@
             : '—';
         }
 
-        // E2B description
-        else if (col === "E2B Analysis") {
+
+
+        // Raw JSON — long, monospace, wrap
+
+        /*
+        else if (col === "E2B Raw JSON") {
+          display = val
+            ? `<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:0; max-width:320px;">${val}</pre>`
+            : '—';
+        }
+        // Any of the 7 structured AI fields — short-to-medium text, wrap instead
+        // of stretching the row
+        else if (["Vehicle Type", "Color", "Number Plate", "Brand", "Load", "Condition", "Additional Details"].includes(col)) {
           display = val ?? '—';
         }
 
-        html += `<td>${display}</td>`;
+        html += `<td style="white-space:normal; max-width:220px; font-size:12px; line-height:1.4;">${display}</td>`;
+        */
+
+        else if (col === "26B A4B Raw JSON" || col === "E2B LiteRT Raw Output") {
+          display = val
+            ? `<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:0; max-width:320px;">${val}</pre>`
+            : '—';
+        }
+        else if (col.includes("(26B A4B)") || col.includes("(E2B LiteRT)")) {
+          display = val ?? '—';
+        }
+
+        html += `<td style="white-space:normal; max-width:220px; font-size:12px; line-height:1.4;">${display}</td>`;
       });
       html += '</tr>';
     });
+
 
       html += '</tbody></table>';
       wrap.innerHTML = html;
