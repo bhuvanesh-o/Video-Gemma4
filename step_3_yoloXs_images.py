@@ -242,7 +242,7 @@ def main(job_id, model_precision = None, performance_hint=None):
     emit(f"🚀 Loading YOLOX-S via OpenVINO ({MODEL_PRECISION}, CPU)...", job_id=job_id,
          stage="detection", ui_message="Loading the truck detection model...")
     OPENVINO_DEVICE = "CPU"
-    PERFORMANCE_HINT = performance_hint or "LATENCY"   # 👈 THIS is the switch — change "LATENCY" to "THROUGHPUT" here, or pass it in from the caller
+    PERFORMANCE_HINT = performance_hint or "THROUGHPUT"   # 👈 THIS is the switch — change "LATENCY" to "THROUGHPUT" here, or pass it in from the caller
 
 
     def check_optimal_requests(compiled_model, job_id=None):

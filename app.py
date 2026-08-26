@@ -5,6 +5,15 @@ from fastapi import FastAPI
 from routers import pipeline, frontend
 import storage
 
+
+import os
+from dotenv import load_dotenv
+
+# Load variables from .env
+load_dotenv()
+
+
+
 CLEANUP_INTERVAL_SECONDS = 3600  # check hourly, delete anything older than 24h
 
 async def _cleanup_loop():

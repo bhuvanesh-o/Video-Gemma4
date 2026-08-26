@@ -162,7 +162,7 @@ def get_compiled_model(model_path, device, performance_hint):
 # ==============================================================================
 # ── load_yolox_session ─────────────────────────────────────────────────────────
 # ==============================================================================
-def load_yolox_session(model_path, device="CPU", performance_hint="LATENCY", job_id=None):
+def load_yolox_session(model_path, device="CPU", performance_hint="THROUGHPUT", job_id=None):
     """
     Initializes an OpenVINO CPU inference session from a model file.
 

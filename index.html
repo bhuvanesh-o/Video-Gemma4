@@ -337,13 +337,13 @@
   }
 
 
-  /* E2B analysis */
+  /* 26B A4B Raw JSON */
   .results-table th:nth-child(8),
   .results-table td:nth-child(8) {
     min-width: 430px;
     width: 430px;
     text-align: left;
-    vertical-align: top;
+    vertical-align: middle;
   }
 
 
@@ -891,17 +891,69 @@
 
         html += `<td style="white-space:normal; max-width:220px; font-size:12px; line-height:1.4;">${display}</td>`;
         */
-
+        
+        
+        /*
         else if (col === "26B A4B Raw JSON" || col === "E2B LiteRT Raw Output") {
           display = val
             ? `<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:0; max-width:320px;">${val}</pre>`
             : '—';
         }
-        else if (col.includes("(26B A4B)") || col.includes("(E2B LiteRT)")) {
-          display = val ?? '—';
+        */
+
+        else if (col === "26B A4B Raw JSON" || col === "E2B LiteRT Raw Output") {
+          
+          const rawWidth = col === "E2B LiteRT Raw Output"
+            ? "520px"
+            : "380px";
+
+          display = val
+            ? `<pre style="
+                white-space:pre-wrap;
+                font-family:var(--font-mono);
+                font-size:11px;
+                margin:0 auto;
+                width:${rawWidth};
+                min-width:${rawWidth};
+                max-width:${rawWidth};
+                text-align:left;
+                line-height:1.45;
+              ">${val}</pre>`
+            : '—';
+        }
+        
+        // This is for gemma 4 E2B where there will be more space for the JSON Raw data to fit 
+
+        let tdStyle = `
+          white-space:normal;
+          font-size:12px;
+          line-height:1.4;
+          vertical-align:middle;
+        `;
+
+        if (col === "E2B LiteRT Raw Output") {
+          tdStyle += `
+            min-width:540px;
+            width:540px;
+            max-width:540px;
+          `;
         }
 
-        html += `<td style="white-space:normal; max-width:220px; font-size:12px; line-height:1.4;">${display}</td>`;
+        else if (col === "26B A4B Raw JSON") {
+          tdStyle += `
+            min-width:400px;
+            width:400px;
+            max-width:400px;
+          `;
+        }
+
+        else {
+          tdStyle += `  
+            max-width:220px;
+          `;
+        }
+
+        html += `<td style="${tdStyle}">${display}</td>`;
       });
       html += '</tr>';
     });
