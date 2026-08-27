@@ -12,6 +12,14 @@ Using anything else (e.g. random noise) would calibrate the quantization
 scales against the wrong data and hurt accuracy for no reason.
 
 Run this BEFORE quantize_int8.py.
+
+NOTE (deferred, not yet applied): ideally VIDEO_DIR here should point at a
+SEPARATE folder from whatever gets used for post-quantization accuracy
+evaluation (e.g. calibration_videos/ vs evaluation_videos/) — otherwise
+INT8's benchmark results are partly evaluated on footage it already "saw"
+during calibration, which isn't a fully independent test. This is a known,
+intentionally-deferred cleanup item, not a bug — VIDEO_DIR is left as
+./test_videos for both purposes for now.
 """
 import os
 import cv2
@@ -26,6 +34,12 @@ OUTPUT_PATH = "calibration_frames.npy"
 
 
 def sample_frames_from_video(video_path, n_frames):
+    """
+    Opens one video and pulls up to n_frames evenly-spaced frames from across
+    its full duration (not just the first few seconds) — via linspace over
+    frame indices, then seeking to each one directly with CAP_PROP_POS_FRAMES.
+    Returns a list of raw BGR frame arrays (not yet preprocessed).
+    """
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     if total_frames <= 0:
@@ -46,6 +60,12 @@ def sample_frames_from_video(video_path, n_frames):
 
 
 def main():
+    """
+    Walks every video in VIDEO_DIR, samples FRAMES_PER_VIDEO frames from each,
+    runs every frame through the SAME preprocess() letterbox/normalize
+    pipeline step_3 uses at real inference time, stacks everything into one
+    big numpy array, and saves it to OUTPUT_PATH for quantize_int8.py.
+    """
     video_extensions = (".mp4", ".avi", ".mov", ".mkv")
     video_files = [f for f in os.listdir(VIDEO_DIR) if f.lower().endswith(video_extensions)]
 

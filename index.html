@@ -621,39 +621,8 @@
     }, 160);
   }
 
-  /**
-   * Appends streamed text to the right-side Live Chat Panel.
-   * Creates a new div, styles it based on the stage, and forces the scrollbar to the bottom.
-   */
 
-  /*
-  function appendFeedMessage(text, stageClass = "") {
-    if (!text) return; // Prevent empty bubbles
-    const item = document.createElement('div');
-    item.className = `feed-item ${stageClass}`; // e.g., 'feed-item segmentation'
-    item.textContent = text;
-    feedList.appendChild(item);
-    
-    // Auto-scroll logic: pushes the scroll position to the total height of the container
-    feedList.scrollTop = feedList.scrollHeight; 
-  }
-  */ 
-
-  /*
-  function appendFeedMessage(text, stageClass = "", imgUrl = null) {
-  if (!text) return;
-  const item = document.createElement('div');
-  item.className = `feed-item ${stageClass}`;
-  if (imgUrl) {
-    item.innerHTML = `<img src="${imgUrl}" style="width:32px;height:32px;object-fit:cover;border-radius:6px;vertical-align:middle;margin-right:8px;">${text}`;
-  } else {
-    item.textContent = text;
-  }
-  feedList.appendChild(item);
-  feedList.scrollTop = feedList.scrollHeight;
-  }
-  */
-
+  
 
   function appendFeedMessage(text, stageClass = "") {
   if (!text) return;
@@ -785,52 +754,12 @@
         html += `<th>${c}</th>`;
       });
       html += '</tr></thead><tbody>';
-      /*
-      data.rows.forEach(row => {
-        html += '<tr>';
-        data.columns.forEach(col => {
-          const val = row[col];
-          let display;
-          
-          // Render actual images if the column is Plate File or Truck File
-          if (col === "Plate File" || col === "Truck File") {
-            display = val
-              ? `<a href="${val}" target="_blank"><img src="${val}" style="height:36px; border-radius:4px; vertical-align:middle;"></a>`
-              : '—';
-          } else {
-            display = val ?? '—';
-          }
-          html += `<td style="padding:6px 10px; border-bottom:1px solid var(--border-soft);">${display}</td>`;
-        });
-        html += '</tr>';
-      });
-      */
+      
 
-      /*
-      data.rows.forEach(row => {
-        html += '<tr>';
-        data.columns.forEach(col => {
-          const val = row[col];
-          let display;
-          let cellStyle = "padding:6px 10px; border-bottom:1px solid var(--border-soft);";
 
-          if (col === "Plate File" || col === "Truck File") {
-            display = val
-              ? `<a href="${val}" target="_blank"><img src="${val}" style="height:36px; border-radius:4px; vertical-align:middle;"></a>`
-              : '—';
-          } else if (col === "E2B Analysis") {
-            // Long readable text — wrap instead of stretching the row, cap width so
-            // the table stays scannable next to the shorter columns.
-            display = val ?? '—';
-            cellStyle += " white-space:normal; max-width:320px; font-size:12px; line-height:1.4;";
-          } else {
-            display = val ?? '—';
-          }
-          html += `<td style="${cellStyle}">${display}</td>`;
-        });
-        html += '</tr>';
-      });
-      */
+
+
+
 
       data.rows.forEach(row => {
 
@@ -874,32 +803,6 @@
         }
 
 
-
-        // Raw JSON — long, monospace, wrap
-
-        /*
-        else if (col === "E2B Raw JSON") {
-          display = val
-            ? `<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:0; max-width:320px;">${val}</pre>`
-            : '—';
-        }
-        // Any of the 7 structured AI fields — short-to-medium text, wrap instead
-        // of stretching the row
-        else if (["Vehicle Type", "Color", "Number Plate", "Brand", "Load", "Condition", "Additional Details"].includes(col)) {
-          display = val ?? '—';
-        }
-
-        html += `<td style="white-space:normal; max-width:220px; font-size:12px; line-height:1.4;">${display}</td>`;
-        */
-        
-        
-        /*
-        else if (col === "26B A4B Raw JSON" || col === "E2B LiteRT Raw Output") {
-          display = val
-            ? `<pre style="white-space:pre-wrap; font-family:var(--font-mono); font-size:11px; margin:0; max-width:320px;">${val}</pre>`
-            : '—';
-        }
-        */
 
         else if (col === "26B A4B Raw JSON" || col === "E2B LiteRT Raw Output") {
           
@@ -957,7 +860,6 @@
       });
       html += '</tr>';
     });
-
 
       html += '</tbody></table>';
       wrap.innerHTML = html;

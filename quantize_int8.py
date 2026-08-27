@@ -8,8 +8,9 @@ can A/B compare both at any time by switching MODEL_PRECISION in
 step_3_yoloXs_images.py.
 
 Run build_calibration_data.py FIRST — this expects calibration_frames.npy to
-already exist. Run step_3_yoloXs_images.py at least once FIRST too (with
-MODEL_PRECISION="FP32") so weights/yolox_small.xml already exists.
+already exist. Run create_model_variants.py FIRST too, so weights/yolox_small_fp32.xml
+already exists (see that script's docstring for why quantizing from a TRUE
+FP32 source matters, vs. the old mislabeled-FP16 file).
 """
 import os
 import numpy as np
@@ -28,6 +29,15 @@ CALIBRATION_DATA_PATH = "calibration_frames.npy"
 
 
 def main():
+    """
+    Loads the true FP32 IR model and the calibration frames array, wraps the
+    frames in an nncf.Dataset (with a transform_fn that just adds the batch
+    dimension — the frames are already preprocessed exactly like real
+    inference input, via build_calibration_data.py's use of the same
+    preprocess() function), runs NNCF's post-training INT8 quantization, and
+    saves the result as its own separate .xml/.bin pair — never overwriting
+    the FP32 source.
+    """
     if not os.path.exists(FP32_IR_PATH):
         raise FileNotFoundError(
             f"{FP32_IR_PATH} not found — run create_model_variants.py first "

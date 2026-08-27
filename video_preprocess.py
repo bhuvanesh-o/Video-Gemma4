@@ -26,7 +26,7 @@ import cv2
 
 from progress import emit
 
-MAX_DURATION_SECONDS = 180      # hard cap: reject anything longer than 1 minute
+MAX_DURATION_SECONDS = 60      # hard cap: reject anything longer than 1 minute
 MAX_HEIGHT = 720                # resolution ceiling: downscale anything taller than this
 MIN_HEIGHT = 720                 # resolution floor: reject anything shorter than this
 

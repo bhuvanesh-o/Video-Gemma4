@@ -4,8 +4,8 @@ step_4_prompt_document.py
 
 Runs BOTH models on the single best truck crop step_3 saved for each logged
 truck:
-  1. Gemma 4 26B A4B via OpenRouter (cloud)
-  2. Gemma 4 E2B via LiteRT-LM (local, no internet needed for inference)
+    1. Gemma 4 26B A4B via OpenRouter (cloud)
+    2. Gemma 4 E2B via LiteRT-LM (local, no internet needed for inference)
 
 Writes 16 new columns total: raw output + 7 fields, per model, clearly
 suffixed so they never collide.
@@ -63,7 +63,17 @@ CORE_PROMPT = (
     Always return all seven keys.
     If information is unavailable, use "not visible".
     """
+    
 )
+
+# ADDED: this strict JSON-schema enforcement block (exact key names,
+# "no markdown/no code fences/no explanation") was appended after real
+# E2B LiteRT runs showed less reliable JSON adherence than 26B A4B's
+# response_format={"type": "json_object"} parameter provides natively —
+# LiteRT-LM's CLI has no equivalent structured-output guarantee, so the
+# prompt itself has to do that enforcement instead.
+
+
 
 RAW_26B_COLUMN = "26B A4B Raw JSON"
 RAW_LITERT_COLUMN = "E2B LiteRT Raw Output"
@@ -78,17 +88,20 @@ def run_26b_a4b(client, image_path):
     result[RAW_26B_COLUMN] = json.dumps(parsed, ensure_ascii=False, indent=2)
     return result
 
-'''
-def run_e2b_litert(image_path):
-    raw_text = call_litert_e2b(image_path, CORE_PROMPT)
-    parsed = extract_json(raw_text)  # LiteRT may not wrap output cleanly — extract_json handles stray text around it
-    fields = extract_fields(parsed)
-    result = {f"{k} (E2B LiteRT)": v for k, v in fields.items()}
-    result[RAW_LITERT_COLUMN] = raw_text
-    return result
-'''
+
 
 def run_e2b_litert(image_path, retries=3):
+
+    """
+    Wraps call_litert_e2b() (ONE subprocess call) with ITS OWN retry loop —
+    two separate layers of retry logic, worth distinguishing: this function
+    retries by calling call_litert_e2b() fresh, in full, up to `retries`
+    times, specifically when JSON PARSING fails (not when the subprocess
+    itself errors — that still propagates up immediately, uncaught here).
+    26B A4B's equivalent retry logic instead lives INSIDE call_gemma_api()
+    itself — the two models' retry strategies aren't structured identically,
+    which is fine, just worth knowing when debugging either path.
+    """
 
     last_raw_text = ""
 
@@ -202,7 +215,6 @@ def main(job_id):
              stage="describing", ui_message=f"Analyzing {vehicle_id} ({idx + 1}/{total})...",
              meta={"clip_progress": {"current": idx + 1, "total": total}})
 
-        # Pass 1: 26B A4B
         # ----------------------------------------------------------------------
         # Pass 1 — 26B A4B OpenRouter
         # ----------------------------------------------------------------------
@@ -252,7 +264,6 @@ def main(job_id):
                 )
             )
 
-        # Pass 2: E2B LiteRT
         # ----------------------------------------------------------------------
         # Pass 2 — E2B LiteRT
         # ----------------------------------------------------------------------
@@ -396,22 +407,12 @@ def main(job_id):
         f"{stats['e2b_success_rate_pct']:.1f}%"
     )
 
-    print(
-        f"Images analyzed : {stats['images_analyzed']}"
-    )
-
-    print(
-        f"Images missing  : {stats['images_missing']}"
-    )
-
-    print(
-        f"Step 4 total    : {stats['step4_total_sec']:.2f}s"
-    )
-
+    print(f"Images analyzed : {stats['images_analyzed']}")
+    print(f"Images missing  : {stats['images_missing']}")
+    print(f"Step 4 total    : {stats['step4_total_sec']:.2f}s")
     print("======================================\n")
 
     return stats
-
 
 if __name__ == "__main__":
     main(job_id="local_test")

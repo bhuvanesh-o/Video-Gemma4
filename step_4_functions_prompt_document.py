@@ -2,139 +2,6 @@
 """
 step_4_functions_prompt_document.py
 
-REWRITTEN AGAIN: ported from a working Colab notebook that calls Gemma 4
-26B A4B (free tier) via OpenRouter, using the openai SDK pointed at
-OpenRouter's base_url. No torch/transformers/PIL needed anymore — this
-whole stage is now just an HTTPS call + JSON parsing.
-
-Retry logic, rate-limit backoff, and JSON-validation-before-returning are
-carried over unchanged from the Colab version — that hardening is worth
-keeping, since free-tier model output can be flaky.
-"""
-
-'''
-
-
-import os
-import base64
-import json
-import re
-import time
-from openai import OpenAI
-
-MODEL_ID = "google/gemma-4-26b-a4b-it:free"
-
-
-def get_client(api_key):
-    return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-
-
-def encode_image_base64(image_path):
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def extract_json(raw_text):
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.MULTILINE)
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if not match:
-        raise ValueError("No JSON object found in model output.")
-    return json.loads(match.group(0))
-
-
-def call_gemma_api(client, image_path, prompt, retries=3):
-    """
-    Unchanged logic from the Colab version: encodes the image, sends it with
-    the structured-output prompt, validates the response is parseable JSON
-    BEFORE returning (retrying on bad JSON), and handles rate-limit
-    backoff separately from other errors. Also falls back to a plain call
-    without extra_body if the reasoning-disable param isn't supported by
-    whatever backend OpenRouter routes this particular request to.
-    """
-    b64_image = encode_image_base64(image_path)
-    ext = os.path.splitext(image_path)[1].lstrip(".").lower()
-    mime = "jpeg" if ext in ("jpg", "jpeg") else ext
-
-    messages = [{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/{mime};base64,{b64_image}"}}
-        ]
-    }]
-
-    last_error = None
-    for attempt in range(1, retries + 1):
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_ID,
-                messages=messages,
-                temperature=0.1,
-                max_tokens=1500,
-                response_format={"type": "json_object"},
-                extra_body={"reasoning": {"enabled": False}},
-            )
-            text = response.choices[0].message.content
-            try:
-                return extract_json(text)  # validated before returning
-            except (ValueError, json.JSONDecodeError):
-                last_error = "unparseable JSON in response"
-                time.sleep(2)
-                continue
-
-        except Exception as e:
-            err_str = str(e)
-            last_error = err_str
-            if "429" in err_str or "rate" in err_str.lower():
-                time.sleep(5 * attempt)
-                continue
-            try:
-                response = client.chat.completions.create(
-                    model=MODEL_ID, messages=messages, temperature=0.1, max_tokens=1500,
-                )
-                return extract_json(response.choices[0].message.content)
-            except Exception as e2:
-                last_error = str(e2)
-                time.sleep(3)
-
-    raise RuntimeError(f"Failed after {retries} attempts. Last error: {last_error}")
-
-
-
-# Label -> loose key-matching target. Order here determines column order
-# in the Excel sheet (after the raw JSON column).
-FIELD_LABELS = [
-    "Vehicle Type", "Color", "Number Plate", "Brand", "Load", "Condition", "Additional Details",
-]
-
-
-def extract_fields(parsed):
-    """
-    Pulls each of the 7 expected fields out of the parsed JSON dict,
-    matching keys loosely (case/spacing/underscore-insensitive) since
-    free-tier JSON key naming isn't perfectly consistent run to run.
-    Always returns all 7 keys (missing ones become "N/A") so every row
-    has the same columns regardless of what the model actually returned.
-    """
-    result = {}
-    for label in FIELD_LABELS:
-        value = "N/A"
-        target = label.replace(" ", "").lower()
-        for key in parsed.keys():
-            if target in key.replace("_", "").replace(" ", "").lower():
-                v = parsed[key]
-                if v:
-                    value = str(v)
-                break
-        result[label] = value
-    return result
-
-'''
-
-# -*- coding: utf-8 -*-
-"""
-step_4_functions_prompt_document.py
-
 Two model backends now:
   - call_gemma_api / get_client  -> Gemma 4 26B A4B via OpenRouter (cloud API)
   - call_litert_e2b               -> Gemma 4 E2B via LiteRT-LM (local, subprocess)
@@ -262,7 +129,13 @@ def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
     print(f"[DEBUG] Model file: {LITERT_MODEL_FILE}")
 
 
-    # Force the child LiteRT Python process to use UTF-8
+    # Force the child litert-lm process to communicate in UTF-8 — needed
+    # because model output can legitimately contain non-Latin text (e.g.
+    # Devanagari/Hindi text painted on a truck body, as seen in real footage
+    # this pipeline processes). Without this, Windows' default console
+    # encoding can throw a UnicodeDecodeError when subprocess tries to
+    # capture that output as text.
+
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -286,16 +159,11 @@ def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
                 f"--attachment={image_path}",
                 f"--prompt={prompt}",
             ],
-            capture_output=True,
-            text=True,
+            capture_output=True, text=True,
 
-            encoding="utf-8",
-            errors="replace",
+            encoding="utf-8", errors="replace",   # "replace" swaps any still-undecodable byte for a placeholder char instead of crashing the whole call
 
-            env=env,
-
-            timeout=timeout,
-            check=False,
+            env=env, timeout=timeout, check=False,
         )
 
         print(f"[DEBUG] Return code: {result.returncode}")
@@ -309,40 +177,19 @@ def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
             )
 
 
-        '''
-        return result.stdout.strip()
-        '''
+        # litert-lm prints its own informational status lines (e.g. "Using
+        # cached model: ...") mixed into stdout ALONGSIDE the actual model
+        # response. Strip those known noise lines out before returning, so
+        # extract_json() downstream doesn't have to parse around them.
 
-        # Remove LiteRT informational lines from the actual model response
         cleaned_lines = [
             line for line in result.stdout.splitlines()
             if not line.strip().startswith("Using cached model:")
         ]
-
         cleaned_output = "\n".join(cleaned_lines).strip()
-
         return cleaned_output
 
-
-    
 
     except Exception as e:
         print(f"[ERROR] litert-lm call failed: {e}")
         raise
-
-    '''
-    result = subprocess.run(
-        [
-            "litert-lm", "run",
-            "--from-huggingface-repo", LITERT_MODEL_REPO,
-            LITERT_MODEL_FILE,
-            "--backend", backend,
-            "--image", image_path,   # <-- VERIFY via `litert-lm run --help`
-            "--prompt", prompt,
-        ],
-        capture_output=True, text=True, timeout=timeout, check=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"litert-lm exited {result.returncode}: {result.stderr.strip()}")
-    return result.stdout.strip()
-    '''

@@ -268,7 +268,10 @@ def main(job_id, model_precision = None, performance_hint=None):
     '''
 
 
+    # matches (or was chosen based on) the optimal_number_of_infer_requests query above — see 
+    # check_optimal_requests()'s printed output for your specific hardware/hint combo
     NUM_INFER_REQUESTS = 4
+
 
     infer_requests = [
         compiled_model.create_infer_request()
