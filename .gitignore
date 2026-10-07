@@ -33,6 +33,12 @@ test_videos_1/
 calibration_videos/
 evaluation_videos/
 
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+
 # Temporary pipeline output
 temp/
 final_assets/

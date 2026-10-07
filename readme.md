@@ -6,7 +6,20 @@ The pipeline combines traditional video processing, YOLOX-S object detection, Op
 
 GitHub: https://github.com/bhuvanesh-o/video-gemma4
 
+
 ---
+
+
+### Mentorship
+
+This project was developed under the guidance and mentorship of:
+
+- **Dr. Kushal Shah** — [LinkedIn Profile](http://linkedin.com/in/kushal-shah-95b9a3b/)
+- **Dr. Nilanjan Banerjee** — [LinkedIn Profile](https://www.linkedin.com/in/nilanjanbanerjee/)
+
+
+---
+
 
 ## Overview
 
