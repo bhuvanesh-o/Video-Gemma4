@@ -1,0 +1,30 @@
+services:
+  gemma:
+    build: .
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      - ./weights:/app/weights
+      - ./storage:/app/storage
+
+      - huggingface_cache:/root/.cache/huggingface
+      - litert_cache:/root/.litert-lm
+      - paddle_cache:/root/.paddlex
+
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODEL_PRECISION: ${MODEL_PRECISION:-FP32}
+      OPENVINO_PERFORMANCE_HINT: ${OPENVINO_PERFORMANCE_HINT:-THROUGHPUT}
+      NUM_INFER_REQUESTS: ${NUM_INFER_REQUESTS:-4}
+
+    env_file:
+      - .env
+
+
+volumes:
+  huggingface_cache:
+  litert_cache:
+  paddle_cache:

@@ -9,6 +9,8 @@ import pandas as pd
 
 import zipfile
 
+from pathlib import Path
+
 # Import your existing, unmodified pipeline modules
 import storage
 import progress
@@ -17,6 +19,17 @@ import step_1_segmentation
 import step_2_video_slice_excel_timestamp
 import step_3_yoloXs_images
 import step_4_prompt_document
+
+# ---------------------------------------------------------
+# Allowed upload formats
+# ---------------------------------------------------------
+
+ALLOWED_VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+}
 
 
 # REFACTOR NOTE (APIRouter split): this used to live directly on the FastAPI()
@@ -59,6 +72,37 @@ def run_pipeline(job_id: str):
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     # Generate a random 8-character ID for this user's session
     job_id = str(uuid.uuid4())[:8] 
+
+    raw_filename = (
+        file.filename
+        or "input.mp4"
+    )
+
+    raw_filename = raw_filename.replace(
+        "\\",
+        "/",
+    )
+
+    safe_filename = raw_filename.rsplit(
+        "/",
+        1,
+    )[-1]
+
+    extension = Path(
+        safe_filename
+    ).suffix.lower()
+
+    if extension not in ALLOWED_VIDEO_EXTENSIONS:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "Unsupported video format. "
+                    "Use MP4, AVI, MOV, or MKV."
+                )
+            },
+        )
+
     
     # Save the file safely using your storage abstraction!
     saved_path = storage.save_upload(job_id, file.file, filename=file.filename)
@@ -70,6 +114,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     #    stage (step_1 plots, step_2 slices, step_3 YOLOX crops/annotated
     #    segments) reads from this same raw/ file, so this one pass is enough
     #    for the whole pipeline to operate in 720p.
+    
     try:
         video_preprocess.validate_and_prepare(saved_path, job_id=job_id)
     except ValueError as e:

@@ -1,467 +1,1261 @@
-How each file works:
+# Video-Gemma4: End-to-End Traffic Video Analytics Pipeline
 
-Here's the rundown, file by file:
+An end-to-end traffic video analysis system for detecting, tracking, extracting, and describing trucks from uploaded videos.
 
-1. progress.py 
+The pipeline combines traditional video processing, YOLOX-S object detection, OpenVINO-optimized CPU inference, PaddleOCR, and multimodal Gemma models. It is exposed through a FastAPI web application with background processing, live progress updates, downloadable results, and Docker support.
 
-— Rewritten. emit() now accepts stage, ui_message, meta in addition to message. Instead of storing flat log strings, each call appends a structured dict: {type, stage, text, meta, timestamp}. Added emit_stage_complete(), emit_done(), emit_error() as explicit signals instead of string-matching "DONE"/"ERROR" in text. Terminal print() behavior is untouched.
-
-
-
-
-2. app.py 
-
-— /stream/{job_id} now sends json.dumps(event) instead of raw text, so the frontend gets real structured data. run_pipeline() calls progress.emit_stage_complete() after each of the 3 steps finishes, then emit_done()/emit_error() at the end. (Also carries forward everything from before: UTF-8 file read, upload validation via video_preprocess, duration/resolution rejection handling.)
-
-
-
-
-3. video_preprocess.py 
-
-— Its 3 emit() calls (downscale-start, downscale-done, already-720p) now tag stage="preparing" and pass a short ui_message instead of the verbose terminal text.
-
-
-
-
-4. step_1_functions_segmentation.py 
-
-— All 11 emit() calls (video-open errors, per-metric analysis, per-segment found, plot saved, Excel merge/save messages) tagged stage="segmentation" with clean UI copy.
-
-
-
-
-5. step_1_segmentation.py 
-
-— All 8 emit() calls (video count, per-video scan progress, skip-video, section separators, summary, final "complete") tagged stage="segmentation". The two pure ==== separator lines now pass ui_message="" so they print to terminal but don't show in the UI at all.
-
-
-
-
-6. step_2_functions_video_slice_excel_timestamp.py
-
- — All 6 emit() calls (open/frame errors, per-clip slicing, Excel save) tagged stage="slicing".
-
-
-
-
-7. step_2_video_slice_excel_timestamp.py 
-— All 5 emit() calls (video count, per-asset processing, no-transitions-found, pipeline complete) tagged stage="slicing".
-
-
-
-
-8. step_3_functions_yoloXs_images.py 
-
-— All 7 emit() calls tagged stage="detection". Two functional fixes carried in here too: (a) save_vehicle_registry() now always writes the xlsx even with zero trucks (headers-only), fixing the earlier /download 404; (b) the per-truck log line in compile_segment_database() now also passes meta={"truck_found": True} so the frontend can increment a live counter without parsing text.
-
-
-
-
-9. step_3_yoloXs_images.py
-
- — All 4 emit() calls (model loading, segment count, per-segment scan) tagged stage="detection".
-
-
-
-
-10. index.html 
-
-— Full rebuild, not a patch:
-New visual system (dark navy/asphalt background, amber accent, teal for "done", Space Grotesk + IBM Plex fonts) instead of the black-terminal-with-green-text look.
-Four distinct views swapped via JS (idle → processing → done/error), instead of one static page with a log box.
-Idle: real drag-and-drop zone + file picker, disabled "Start Processing" until a file's chosen.
-Processing: big current-stage headline + description that live-updates from SSE stage_update events, plus a 3-dot trail (Segmenting → Slicing → Detecting) connected by an animated dashed line that lights up as stages complete — driven by stage_complete events.
-Done: shows a live truck count (from meta.truck_found events), download button, "process another video" button.
-Error: shows the error event's text with a retry button.
-Handles upload rejection (too long/wrong resolution) inline instead of a terminal-style error dump.
-Accessibility: prefers-reduced-motion respected, visible focus rings, responsive down to mobile.
-
-
-
-
-Net effect: the terminal (what you see when running uvicorn locally) prints exactly what it always did — nothing changed there. The browser now gets a real narrative UI instead of a scrolling log, and the mid-processing-upload / empty-registry-download bugs from earlier are still fixed underneath it.
-
-
-
-# 🛠️ MODULE FUNCTIONS BREAKDOWN: segment_pipeline_lib.py
-
-### 1. `compute_histogram`
-* **Syntax:** `compute_histogram(frame, bins=64)`
-* **Core Description:** This function converts a standard color video frame into a 1D grayscale intensity distribution map. It normalizes pixel distribution counts so that frame-to-frame content can be compared reliably, regardless of minor fluctuating brightness.
-* **Inputs (2 total):**
-    * `frame`: `numpy.ndarray` | Dimensions: 3D Array (Height x Width x Channels) representing a single BGR color image.
-    * `bins`: `int` | Dimensions: Scalar value (Default: `64`). Specifies the discretization resolution of the output array.
-* **Outputs (1 total):**
-    * `hist`: `numpy.ndarray` | Dimensions: 1D Array with a shape of `(bins,)` (e.g., `(64,)`), containing normalized floating-point probability values between `0.0` and `1.0`.
+GitHub: https://github.com/bhuvanesh-o/video-gemma4
 
 ---
 
-### 2. `extract_video_metrics`
-* **Syntax:** `extract_video_metrics(video_path, active_smoothing_method="Savitzky-Golay", savgol_window=7, savgol_poly=3, bins=64)`
-* **Core Description:** This function performs the structural frame extraction at a stable rate of 1 frame per second and computes sequential scene changes. It generates mathematical tracking vectors for both Bhattacharyya and Cosine matrix transitions, applying a temporal smoothing filter over the raw signals.
-* **Inputs (5 total):**
-    * `video_path`: `str` | Dimensions: Scalar path string pointing to the source `.mp4` video file location.
-    * `active_smoothing_method`: `str` | Dimensions: Scalar configuration string (e.g., `"Savitzky-Golay"`).
-    * `savgol_window`: `int` | Dimensions: Scalar odd integer (Default: `7`) defining the signal window size.
-    * `savgol_poly`: `int` | Dimensions: Scalar integer (Default: `3`) specifying the polynomial order.
-    * `bins`: `int` | Dimensions: Scalar integer (Default: `64`) passed downstream to the histogram calculator.
-* **Outputs (1 tuple containing 3 elements OR `None` if invalid):**
-    * `timestamps`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` containing float second metrics for every processed frame.
-    * `metrics_raw`: `dict` | Dimensions: Dictionary containing 2 key-value pairs (`"Bhattacharyya"`, `"Cosine"`). Each value points to a 1D `numpy.ndarray` of shape `(N,)` tracking raw variances.
-    * `metrics_filtered`: `dict` | Dimensions: Dictionary containing 2 key-value pairs mirroring `metrics_raw`, where each value points to a smoothed 1D `numpy.ndarray` of shape `(N,)`.
+## Overview
+
+The system takes a traffic video as input and automatically performs:
+
+1. Video validation and preprocessing
+2. Temporal activity segmentation
+3. Video segment extraction
+4. Truck detection and tracking
+5. Representative truck image selection
+6. License plate region extraction and OCR
+7. Vehicle-level multimodal analysis using Gemma
+8. Structured Excel report generation
+9. Browser preview and downloadable results
+
+The project was also designed to explore CPU inference optimization using OpenVINO, asynchronous inference, FP32/FP16/INT8 model variants, post-training quantization, and resource benchmarking.
 
 ---
 
-### 3. `scale_and_segment`
-* **Syntax:** `scale_and_segment(filtered_array, raw_array, noise_floor, peak_prominence_factor, min_peak_height, min_peak_distance_secs, base_slope_cutoff)`
-* **Core Description:** This function normalizes the filtered time-series data tracks onto a rigid 0 to 1 scale using a defensive noise flooring guard. It runs peak locating routines, executes front/back boundary edge recoveries, and tracks peak slope paths downward to isolate event endpoints.
-* **Inputs (7 total):**
-    * `filtered_array`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` holding the smoothed change metrics.
-    * `raw_array`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` holding the raw change metrics.
-    * `noise_floor`: `float` | Dimensions: Scalar configuration float serving as a minimum division cap.
-    * `peak_prominence_factor`: `float` | Dimensions: Scalar scaling multiplier to verify target signal prominence.
-    * `min_peak_height`: `float` | Dimensions: Scalar threshold value defining the absolute minimum height for peaks.
-    * `min_peak_distance_secs`: `int` or `float` | Dimensions: Scalar specifying the spatial window spacing between peaks.
-    * `base_slope_cutoff`: `float` | Dimensions: Scalar coefficient tracking the threshold cutoff point above valley floors.
-* **Outputs (1 tuple containing 3 elements):**
-    * `scaled_smoothed`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` scaled between `0.0` and `1.0`.
-    * `scaled_raw`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` scaled between `0.0` and `1.0`.
-    * `segments`: `list` | Dimensions: A 1D list containing `M` structured dictionaries (one for each detected video event), where each dict contains three scalar keys: `'start_idx'`, `'peak_idx'`, and `'end_idx'`.
+
+## Prerequisites
+
+For local execution:
+
+- Python 3.x
+- Git
+- FFmpeg
+- Internet connection for initial model downloads
+- Sufficient disk space for model weights and generated video files
+
+Optional:
+
+- Docker and Docker Compose
+- OpenRouter API key for cloud Gemma inference
+- Hugging Face token if required for model access
+
 
 ---
 
-### 4. `log_segments`
-* **Syntax:** `log_segments(v_name, metric_name, segments, timestamps)`
-* **Core Description:** This function outputs timeline details directly to the interactive monitoring terminal for debugging purposes. It formats entry/exit rows specifically for the `"Cosine"` tracking layer to completely prevent downstream database logging duplication.
-* **Inputs (4 total):**
-    * `v_name`: `str` | Dimensions: Scalar string representing the source filename.
-    * `metric_name`: `str` | Dimensions: Scalar string identifying the active evaluation track (e.g., `"Cosine"` or `"Bhattacharyya"`).
-    * `segments`: `list` | Dimensions: A 1D list containing `M` index map dictionaries generated by `scale_and_segment`.
-    * `timestamps`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` mapping file index targets to exact elapsed seconds.
-* **Outputs (1 total):**
-    * `excel_rows`: `list` | Dimensions: A 1D list containing structured metadata tracking row dictionaries. If `metric_name != "Cosine"`, this list returns completely empty `[]`.
+
+## Quick Start
+
+### Clone the repository
+
+```bash
+git clone https://github.com/bhuvanesh-o/video-gemma4.git
+cd video-gemma4
+```
+
+### Open in VS Code
+
+```bash
+code .
+```
+
+### Create a virtual environment
+
+Windows:
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### Install dependencies
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### Create `.env`
+
+Windows:
+
+```powershell
+copy .env.example .env
+```
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+
+
+### Start the application
+
+Recommended:
+
+```bash
+python -m uvicorn app:app --reload
+```
+
+Alternatively:
+
+```bash
+python main.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+Upload a traffic video through the web interface and wait for the pipeline to complete.
+
 
 ---
 
-### 5. `render_segment_plot`
-* **Syntax:** `render_segment_plot(v_name, metric_name, timestamps, scaled_raw, scaled_smoothed, segments, color, output_path)`
-* **Core Description:** This function processes signal curves into high-fidelity evaluation charts using the Matplotlib library backend. It automatically overlays colored transition line flags, shades background regions, adds boundary margins, and exports a high-resolution `.png` file.
-* **Inputs (8 total):**
-    * `v_name`: `str` | Dimensions: Scalar string representing the processing asset title.
-    * `metric_name`: `str` | Dimensions: Scalar string establishing the graph tracking mode title.
-    * `timestamps`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` mapping the horizontal X-axis.
-    * `scaled_raw`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` mapping the raw Y-axis coordinates.
-    * `scaled_smoothed`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` mapping the filtered Y-axis coordinates.
-    * `segments`: `list` | Dimensions: A 1D list containing `M` segment dictionary blocks used to coordinate shading ranges.
-    * `color`: `str` | Dimensions: Scalar color hex string configuration variable (e.g., `"#1f77b4"`).
-    * `output_path`: `str` | Dimensions: Scalar file path string designating the export path destination.
-* **Outputs (None):**
-    * Returns nothing. It programmatically saves a plot file to disk and opens an on-screen visual chart window workspace instead.
+
+## Usage
+
+1. Start the FastAPI application.
+2. Open `http://127.0.0.1:8000`.
+3. Upload a supported traffic video.
+4. Wait while the pipeline performs:
+   - preprocessing
+   - segmentation
+   - video slicing
+   - truck detection and tracking
+   - OCR
+   - Gemma-based analysis
+5. Preview the detected vehicle information in the browser.
+6. View annotated videos and extracted images.
+7. Download the generated Excel vehicle registry.
+
 
 ---
 
-### 6. `save_segment_excel`
-* **Syntax:** `save_segment_excel(excel_metadata_list, excel_output_path)`
-* **Core Description:** This function acts as a persistent file storage gateway by compiling active dictionary records into a unified data structure. It checks for historical workbooks to safely merge files, executes a strict de-duplication guard using file indices, and updates the final `.xlsx` sheet.
-* **Inputs (2 total):**
-    * `excel_metadata_list`: `list` | Dimensions: A 1D list containing master dictionaries collected across all processed assets.
-    * `excel_output_path`: `str` | Dimensions: Scalar file path destination string pointing to the target spreadsheet.
-* **Outputs (None):**
-    * Returns nothing. It dynamically transforms runtime structures into binary files saved directly on local disk storage arrays.
+## Expected Outputs
 
 
+After successful processing, each job generates its own directory under:
 
 
+'''text
+storage/jobs/<job_id>/
 
-
-# 🛠️ MODULE FUNCTIONS BREAKDOWN: slice_pipeline_lib.py
-
-### 1. `compute_histogram`
-* **Syntax:** `compute_histogram(frame, bins=64)`
-* **Core Description:** This function converts a standard BGR color video frame into a 1D grayscale intensity distribution map. It normalizes pixel distribution counts so the histogram sums strictly to 1.0, safely preventing divide-by-zero math errors down the line.
-* **Inputs (2 total):**
-    * `frame`: `numpy.ndarray` | Dimensions: 3D Array (Height x Width x Channels) representing a single BGR color image.
-    * `bins`: `int` | Dimensions: Scalar value (Default: `64`). Specifies the discretization resolution of the output array.
-* **Outputs (1 total):**
-    * `hist`: `numpy.ndarray` | Dimensions: 1D Array of shape `(bins,)` containing normalized floating-point probability values.
 
 ---
 
-### 2. `extract_cosine_curve`
-* **Syntax:** `extract_cosine_curve(video_path, savgol_window=7, savgol_poly=3, bins=64)`
-* **Core Description:** This function opens a target video and extracts exactly 1 frame per second to maximize processing speed. It computes the raw Cosine mathematical distance between consecutive frames and applies a Savitzky-Golay temporal filter to iron out camera flicker into a smooth trend line.
-* **Inputs (4 total):**
-    * `video_path`: `str` | Dimensions: Scalar string pointing to the source `.mp4` file.
-    * `savgol_window`: `int` | Dimensions: Scalar odd integer (Default: `7`) defining the signal window size.
-    * `savgol_poly`: `int` | Dimensions: Scalar integer (Default: `3`) specifying the polynomial order.
-    * `bins`: `int` | Dimensions: Scalar integer (Default: `64`) passed downstream to the histogram calculator.
-* **Outputs (1 tuple containing 3 elements OR `None` if invalid/corrupt):**
-    * `timestamps`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` containing float metric seconds.
-    * `fps`: `float` | Dimensions: Scalar float representing the video's native playback speed.
-    * `cosine_smoothed`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` containing the filtered Cosine distance metrics.
+## Pipeline
+
+```text
+Uploaded Traffic Video
+        │
+        ▼
+┌──────────────────────────┐
+│ Video Validation         │
+│ + Resolution Processing  │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Step 1: Segmentation     │
+│ Histogram-based change   │
+│ detection                │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Step 2: Video Slicing    │
+│ Extract relevant clips   │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Step 3: Detection        │
+│ YOLOX-S + OpenVINO       │
+│ Tracking + PaddleOCR     │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Step 4: Description      │
+│ Cloud + Local Gemma      │
+└────────────┬─────────────┘
+             │
+             ▼
+┌──────────────────────────┐
+│ Vehicle Registry         │
+│ Images + Video + Excel   │
+└──────────────────────────┘
+```
 
 ---
 
-### 3. `find_cosine_segments`
-* **Syntax:** `find_cosine_segments(cosine_smoothed, noise_floor, peak_prominence_factor, min_peak_height, min_peak_distance_secs, base_slope_cutoff)`
-* **Core Description:** This function normalizes the smoothed curve to a rigid 0 to 1 scale and identifies motion spikes using SciPy's peak detector. It contains a specialized "Boundary Recovery" layer for activity near the 0.0s mark and utilizes a saddle-point topographical engine to find exact start and end valleys.
-* **Inputs (6 total):**
-    * `cosine_smoothed`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` holding the smoothed metrics.
-    * `noise_floor`: `float` | Dimensions: Scalar configuration float serving as a minimum division cap.
-    * `peak_prominence_factor`: `float` | Dimensions: Scalar multiplier to verify target signal prominence.
-    * `min_peak_height`: `float` | Dimensions: Scalar threshold value defining the minimum allowed peak height.
-    * `min_peak_distance_secs`: `int` or `float` | Dimensions: Scalar specifying the required spatial window between peaks.
-    * `base_slope_cutoff`: `float` | Dimensions: Scalar coefficient tracking the threshold cutoff point above valley floors.
-* **Outputs (1 total):**
-    * `segments`: `list` | Dimensions: A 1D list containing `M` structured dictionaries (one for each detected video event), containing three integer scalar keys: `'start_idx'`, `'peak_idx'`, and `'end_idx'`.
+# Features
+
+## 1. Video preprocessing
+
+Uploaded videos are validated before the full pipeline begins.
+
+The preprocessing layer handles:
+
+- video metadata extraction
+- resolution validation
+- automatic downscaling of videos above the target resolution
+- rejection of unsupported/invalid inputs
+- job-specific storage
+
+Supported upload extensions:
+
+```text
+.mp4
+.avi
+.mov
+.mkv
+```
+
+The pipeline is currently designed around traffic videos of at least 720p resolution.
 
 ---
 
-### 4. `slice_physical_mp4`
-* **Syntax:** `slice_physical_mp4(input_path, start_sec, end_sec, output_path, fps)`
-* **Core Description:** This is a physical file engineering function. It seeks directly to a specific timestamp in the master video, reads the frames individually, and re-encodes them into a brand-new, standalone lightweight `.mp4` file containing only the isolated activity.
-* **Inputs (5 total):**
-    * `input_path`: `str` | Dimensions: Scalar string pointing to the source video file.
-    * `start_sec`: `float` | Dimensions: Scalar float marking the beginning of the action.
-    * `end_sec`: `float` | Dimensions: Scalar float marking the end of the action.
-    * `output_path`: `str` | Dimensions: Scalar string defining where the new clip will be saved.
-    * `fps`: `float` | Dimensions: Scalar float dictating the frame rate of the output file.
-* **Outputs (None):**
-    * Returns nothing. It physically writes a new `.mp4` binary file to the local storage drive.
+## 2. Temporal video segmentation
+
+Instead of running the expensive detection pipeline blindly over the entire video, the system first identifies regions containing meaningful scene activity.
+
+The segmentation stage:
+
+- samples video frames
+- converts frames to grayscale
+- computes normalized image histograms
+- compares consecutive frames using:
+  - Cosine distance
+  - Bhattacharyya distance
+- smooths the resulting signals
+- detects significant peaks
+- estimates segment start/end boundaries
+- saves the detected timeline to Excel
+
+Output:
+
+```text
+segment_timestamps.xlsx
+```
+
+This reduces unnecessary downstream processing.
 
 ---
 
-### 5. `slice_video_segments`
-* **Syntax:** `slice_video_segments(v_path, v_name, segments, timestamps, fps, segment_dir)`
-* **Core Description:** This function acts as the batch manager for a single video. It creates an isolated subfolder for the specific asset, loops through all identified timeline dictionaries, calls the slicing function to generate physical clips, and formats the timeline metrics into database rows.
-* **Inputs (6 total):**
-    * `v_path`: `str` | Dimensions: Scalar string representing the full source path.
-    * `v_name`: `str` | Dimensions: Scalar string representing the source filename.
-    * `segments`: `list` | Dimensions: A 1D list containing `M` index map dictionaries generated by `find_cosine_segments`.
-    * `timestamps`: `numpy.ndarray` | Dimensions: 1D Array of shape `(N,)` mapping file index targets to exact elapsed seconds.
-    * `fps`: `float` | Dimensions: Scalar float of the video's framerate.
-    * `segment_dir`: `str` | Dimensions: Scalar string defining the master output folder path.
-* **Outputs (1 total):**
-    * `excel_rows`: `list` | Dimensions: A 1D list containing `M` structured metadata tracking row dictionaries (logging Source_Video, Segment_ID, Start_Time, End_Time) formatted for database injection.
+## 3. Video slicing
+
+The detected activity intervals are converted into independent video clips.
+
+Example:
+
+```text
+trial_video_segments/
+└── source_video/
+    ├── segment_1.mp4
+    ├── segment_2.mp4
+    └── ...
+```
+
+These clips are then passed to the detection stage.
 
 ---
 
-### 6. `save_segment_excel`
-* **Syntax:** `save_segment_excel(excel_metadata_list, excel_path)`
-* **Core Description:** This function acts as a persistent Excel storage compiler. It takes the newly generated list of segment metadata, safely loads any existing master `.xlsx` workbook, concatenates the new rows, executes a strict de-duplication override if a video was re-processed, and saves the final file.
-* **Inputs (2 total):**
-    * `excel_metadata_list`: `list` | Dimensions: A 1D list containing master tracking dictionaries collected across the current run.
-    * `excel_path`: `str` | Dimensions: Scalar file path destination string pointing to the target spreadsheet.
-* **Outputs (None):**
-    * Returns nothing. Dynamically transforms runtime structures into binary `.xlsx` files written directly to disk.
+# 4. YOLOX-S Truck Detection
 
+Truck detection is performed using **YOLOX-S**.
 
+The original model is represented as ONNX and is executed through **OpenVINO** for optimized CPU inference.
 
+The pipeline currently targets the COCO truck class.
 
+Main detection operations include:
 
-
-
-# 🛠️ MODULE FUNCTIONS BREAKDOWN: yolox_pipeline_lib.py
-
-### 1. `ensure_yolox_weights`
-* **Syntax:** `ensure_yolox_weights(onnx_path, weights_url)`
-* **Core Description:** This function serves as an auto-initialization guard. It checks the local drive for the required pre-compiled YOLOX ONNX weights and automatically downloads them from the official repository if they are missing, ensuring the inference engine never crashes due to missing assets.
-* **Inputs (2 total):**
-    * `onnx_path`: `str` | Dimensions: Scalar string defining the local target path for the `.onnx` model file.
-    * `weights_url`: `str` | Dimensions: Scalar string containing the remote URL to download the model from.
-* **Outputs (None):**
-    * Returns nothing. It streams binary data over the network and writes a physical `.onnx` file to the local disk.
+- 640 × 640 letterbox preprocessing
+- YOLOX output decoding
+- confidence filtering
+- Non-Maximum Suppression
+- truck-only class filtering
 
 ---
 
-### 2. `load_yolox_session`
-* **Syntax:** `load_yolox_session(onnx_path)`
-* **Core Description:** This function bridges the gap between the static model file and active execution memory. It instantiates the ONNX Runtime session explicitly forcing a CPU-bound execution provider, and extracts the model's dynamic input node name.
-* **Inputs (1 total):**
-    * `onnx_path`: `str` | Dimensions: Scalar string pointing to the verified `.onnx` model file.
-* **Outputs (1 tuple containing 2 elements):**
-    * `ort_session`: `onnxruntime.InferenceSession` | Dimensions: A complex memory-bound ONNX execution object.
-    * `input_name`: `str` | Dimensions: Scalar string containing the exact internal tensor label the neural network expects (e.g., `"images"`).
+# 5. OpenVINO Model Optimization
+
+The project supports three inference precision modes:
+
+```text
+FP32
+FP16
+INT8
+```
+
+The mode can be configured through `.env`:
+
+```env
+MODEL_PRECISION=FP32
+```
+
+or:
+
+```env
+MODEL_PRECISION=FP16
+```
+
+or:
+
+```env
+MODEL_PRECISION=INT8
+```
 
 ---
 
-### 3. `preprocess`
-* **Syntax:** `preprocess(img, input_size)`
-* **Core Description:** This function is a strict dimensional enforcement layer. It resizes raw video frames while preserving their true physical aspect ratio (letterboxing), pads empty space with a neutral baseline gray (114), and transposes the color channels from standard OpenCV `HWC` format into the network-compliant `CHW` format.
-* **Inputs (2 total):**
-    * `img`: `numpy.ndarray` | Dimensions: 3D Array (Height x Width x Channels) representing a raw BGR image.
-    * `input_size`: `tuple` | Dimensions: A 2-element integer tuple dictating the rigid model input dimensions (e.g., `(640, 640)`).
-* **Outputs (1 tuple containing 2 elements):**
-    * `padded`: `numpy.ndarray` | Dimensions: 3D Array reshaped to `(Channels x Height x Width)` and cast to `float32` memory types.
-    * `r`: `float` | Dimensions: Scalar scale ratio used to accurately map downstream bounding boxes back to the original video size.
+## FP32
+
+When FP32 is selected:
+
+```text
+YOLOX-S ONNX
+    ↓
+OpenVINO conversion
+    ↓
+FP32 OpenVINO IR
+```
+
+The model is generated automatically if the FP32 OpenVINO model is missing.
+
+Files:
+
+```text
+weights/yolox_small_fp32.xml
+weights/yolox_small_fp32.bin
+```
 
 ---
 
-### 4. `decode_outputs`
-* **Syntax:** `decode_outputs(outputs, img_size, strides=(8, 16, 32))`
-* **Core Description:** This function acts as the neural network's translation layer. It takes the raw, multi-scale grid prediction tensors emitted by the YOLOX neural graph and mathematically reconstructs them into absolute pixel-based bounding box coordinates.
-* **Inputs (3 total):**
-    * `outputs`: `numpy.ndarray` | Dimensions: Multidimensional array containing raw network predictions.
-    * `img_size`: `tuple` | Dimensions: A 2-element integer tuple matching the model's input size constraints.
-    * `strides`: `tuple` | Dimensions: A 3-element integer tuple (Default: `(8, 16, 32)`) representing the feature pyramid downsampling steps.
-* **Outputs (1 total):**
-    * `outputs`: `numpy.ndarray` | Dimensions: Modified in-place, returning a multidimensional array where the coordinate offsets have been resolved into absolute spatial locations.
+## FP16
+
+When FP16 is selected:
+
+```text
+YOLOX-S ONNX
+    ↓
+OpenVINO conversion
+    ↓
+FP16-compressed OpenVINO IR
+```
+
+Files:
+
+```text
+weights/yolox_small_fp16.xml
+weights/yolox_small_fp16.bin
+```
 
 ---
 
-### 5. `get_truck_boxes`
-* **Syntax:** `get_truck_boxes(outputs, ratio, w, h, score_thr, nms_thr, truck_class_id=7)`
-* **Core Description:** This function filters the decoded model outputs to strictly isolate target classes (like Trucks). It applies a confidence mask, executes Non-Maximum Suppression (NMS) to delete duplicate overlapping detection boxes, and clips target parameters to prevent fatal edge-boundary errors.
-* **Inputs (7 total):**
-    * `outputs`: `numpy.ndarray` | Dimensions: Decoded coordinate prediction arrays.
-    * `ratio`: `float` | Dimensions: Scalar resize mapping ratio inherited from `preprocess`.
-    * `w`: `int` | Dimensions: Scalar native frame width.
-    * `h`: `int` | Dimensions: Scalar native frame height.
-    * `score_thr`: `float` | Dimensions: Scalar minimum confidence percentage.
-    * `nms_thr`: `float` | Dimensions: Scalar geometric intersection limit.
-    * `truck_class_id`: `int` | Dimensions: Scalar class index integer (Default: `7` for COCO trucks).
-* **Outputs (1 total):**
-    * `final_boxes`: `list` | Dimensions: A 2D list array of shape `(M, 4)` containing `M` valid vehicles, where each entry is `[x1, y1, x2, y2]`.
+## INT8
+
+INT8 inference uses a post-training quantized OpenVINO model.
+
+Required files:
+
+```text
+weights/yolox_small_int8.xml
+weights/yolox_small_int8.bin
+```
+
+The INT8 model can be generated using the provided calibration and quantization utilities.
+
+Typical workflow:
+
+```bash
+python create_model_variants.py
+python build_calibration_data.py
+python quantize_int8.py
+```
+
+The quantization pipeline uses representative video frames and NNCF post-training quantization.
 
 ---
 
-### 6. `LightweightTracker`
-* **Syntax:** `LightweightTracker(max_disappeared, distance_threshold)` -> `.update(boxes)`
-* **Core Description:** This is an instantiated class acting as a real-time Euclidean spatial tracker. It calculates the centroid distance between historical object states and newly detected bounding boxes, locking IDs across frames and automatically recovering tracks that briefly disappear behind environmental obstacles (like trees).
-* **Inputs (for `__init__` / 2 total):**
-    * `max_disappeared`: `int` | Dimensions: Scalar integer dictating the maximum allowed blind frames before a track is permanently deleted.
-    * `distance_threshold`: `float` | Dimensions: Scalar spatial limit denoting how far an object is allowed to physically jump between frames.
-* **Inputs (for `.update()` / 1 total):**
-    * `boxes`: `list` | Dimensions: A 2D list of current frame bounding coordinate arrays.
-* **Outputs (1 total):**
-    * `active_tracks`: `dict` | Dimensions: A 1D tracking dictionary where the keys are unique integer IDs (e.g., `1`, `2`) mapping to a list of integer bounding coordinates `[x1, y1, x2, y2]`.
+# 6. Asynchronous OpenVINO Inference
+
+The detector supports multiple simultaneous OpenVINO inference requests.
+
+For example:
+
+```env
+NUM_INFER_REQUESTS=4
+```
+
+Frames are submitted asynchronously so inference can overlap rather than processing each frame using a strict:
+
+```text
+submit → wait → process → submit → wait
+```
+
+cycle.
+
+The implementation still processes completed frames in chronological order because tracking depends on frame ordering.
+
+The OpenVINO performance mode can also be configured:
+
+```env
+OPENVINO_PERFORMANCE_HINT=THROUGHPUT
+```
+
+or:
+
+```env
+OPENVINO_PERFORMANCE_HINT=LATENCY
+```
 
 ---
 
-### 7. `run_detection_tracking`
-* **Syntax:** `run_detection_tracking(local_video_path, local_out_vid, t_start, ort_session, input_name, input_size, truck_class_id, detection_score_thr, detection_nms_thr, tracker_max_disappeared, tracker_distance_thr, collision_std_guard, plate_margin_width_clip, plate_bottom_height_clip)`
-* **Core Description:** This is the master per-segment computational engine. It iterates through the video slice frame-by-frame, pipes data to the ONNX model, updates the tracking logic, dynamically captures "Hero Frame" image crops when the vehicle hits the visual center-point, and superimposes active tracking metadata onto an exported debug video.
-* **Inputs (14 total):**
-    * *(Mixture of scalar path strings, ONNX session objects, integer configuration thresholds, and float boundary limit multipliers defined in preceding functions).*
-* **Outputs (1 total):**
-    * `active_state_buffer`: `dict` | Dimensions: A complex, multi-layered tracking dictionary where each key is a `track_id`. Values are nested dictionaries containing: `in_time`, `out_time`, `aspect_ratios` (list), `best_truck_img` (3D numpy array), and `best_plate_img` (3D numpy array).
+# 7. Lightweight Multi-Object Tracking
+
+Detected trucks are assigned persistent IDs across video frames.
+
+The tracker uses spatial/centroid information and handles short detection disappearances.
+
+Example vehicle IDs:
+
+```text
+TRUCK_1_1
+TRUCK_1_2
+TRUCK_2_1
+```
+
+Broken tracks may also be merged using temporal and spatial constraints.
 
 ---
 
-### 8. `merge_broken_tracks`
-* **Syntax:** `merge_broken_tracks(active_state_buffer, merge_max_time_gap, merge_max_spatial_gap)`
-* **Core Description:** A secondary associative cleanup engine. It scans the raw database buffer for interrupted physical tracks (caused by deep shadow or temporary occlusion) and mathematically stitches them back together by matching adjacent exit/entry timestamps alongside minimal spatial drift.
-* **Inputs (3 total):**
-    * `active_state_buffer`: `dict` | Dimensions: The complex operational dictionary generated by the core tracker loop.
-    * `merge_max_time_gap`: `float` | Dimensions: Scalar limit defining max allowable seconds between a track's disappearance and reappearance.
-    * `merge_max_spatial_gap`: `float` | Dimensions: Scalar geometric pixel distance limit.
-* **Outputs (1 total):**
-    * `active_state_buffer`: `dict` | Dimensions: The heavily mutated dictionary object, returning with consolidated profiles and all secondary fragments deleted.
+# 8. Representative Truck Image Selection
+
+Rather than saving every detected frame, the pipeline searches for useful representative images.
+
+Candidate frames are evaluated using factors such as:
+
+- image sharpness
+- truck bounding-box size
+- distance from image boundaries
+- temporal spacing
+- approach/receding behaviour
+
+The highest-quality truck crops are saved for later OCR and multimodal analysis.
 
 ---
 
-### 9. `compile_segment_database`
-* **Syntax:** `compile_segment_database(active_state_buffer, seg_id, master_video_name, asset_dir, min_valid_frames_logged)`
-* **Core Description:** This function transitions pipeline data into persistent cold storage. It classifies truck types based on their statistical physical aspect ratios, dumps optimal image crops to the hard drive, and links them via local Excel `HYPERLINK` formulas to prevent cloud-syncing lag.
-* **Inputs (5 total):**
-    * `active_state_buffer`: `dict` | Dimensions: The cleaned operational tracking dictionary.
-    * `seg_id`: `int` or `str` | Dimensions: Scalar identification string for the segment.
-    * `master_video_name`: `str` | Dimensions: Scalar string representing the source file.
-    * `asset_dir`: `str` | Dimensions: Scalar path destination for physical image `.jpg` exports.
-    * `min_valid_frames_logged`: `int` | Dimensions: Scalar baseline to aggressively reject false-positive hallucination blips.
-* **Outputs (1 total):**
-    * `rows`: `list` | Dimensions: A 1D list containing `M` finalized row dictionaries structured for Pandas injection (featuring keys like `"Vehicle ID"`, `"In Time"`, `"Plate File"`, etc.).
+# 9. License Plate Processing with PaddleOCR
+
+The pipeline uses **PaddleOCR** for text detection and recognition.
+
+It attempts to:
+
+1. locate likely text/plate regions
+2. score candidate regions
+3. run OCR
+4. select the most plausible license plate text
+5. save the plate crop
+
+Example output directories:
+
+```text
+final_assets/
+├── truck_crops/
+└── plate_crops/
+```
+
+PaddleOCR model files are automatically downloaded and cached on first use.
+
+Therefore, the first run may take longer than later runs.
 
 ---
 
-### 10. `save_vehicle_registry`
-* **Syntax:** `save_vehicle_registry(final_database, asset_dir)`
-* **Core Description:** The terminal database compilation layer. It structures the global memory lists into an interactive Pandas DataFrame, sorts events chronologically by the master source video, and binds the data to a binary `.xlsx` master ledger using the `openpyxl` engine.
-* **Inputs (2 total):**
-    * `final_database`: `list` | Dimensions: A 1D array of master aggregated dictionary records collected across all pipeline events.
-    * `asset_dir`: `str` | Dimensions: Scalar destination path string for the compiled workbook.
-* **Outputs (None):**
-    * Returns nothing. Creates and dynamically writes to `Vehicle_Registry_Master.xlsx` on the persistent storage drive.
+# 10. Gemma-Based Vehicle Analysis
 
+Each selected truck image is analyzed using two multimodal model paths.
 
+## Cloud model
 
+A Gemma model is accessed through **OpenRouter**.
 
+It analyzes information such as:
 
+- vehicle type
+- color
+- number plate
+- brand / make
+- load / cargo
+- visible condition or damage
+- additional identifying details
 
+`OPENROUTER_API_KEY` is optional.
 
-
-# 🛠️ MODULE FUNCTIONS BREAKDOWN: gemma_prompt_pipeline_lib.py
-
-### 1. `detect_device`
-* **Syntax:** `detect_device()`
-* **Core Description:** This function acts as a hardware diagnostic probe. It automatically detects if a compatible CUDA GPU is available for processing and explicitly assigns the mathematical precision level (`float16` for fast GPU compute, `float32` for CPU fallbacks) to prevent tensor mismatch crashes.
-* **Inputs (0 total):** * Takes no arguments.
-* **Outputs (1 tuple containing 2 elements):**
-    * `device`: `str` | Dimensions: Scalar string defining the hardware target (e.g., `"cuda"` or `"cpu"`).
-    * `dtype`: `torch.dtype` | Dimensions: PyTorch memory format object (e.g., `torch.float16` or `torch.float32`).
+If the key is not provided, the cloud Gemma stage is skipped while the remaining pipeline can continue.
 
 ---
 
-### 2. `load_gemma_model`
-* **Syntax:** `load_gemma_model(model_id, dtype, device_label="cpu")`
-* **Core Description:** This function securely fetches the Multimodal Large Language Model weights from local cache or remote repositories. It binds the neural network directly to the detected hardware layer using the `device_map="auto"` distribution logic and handles fatal load errors safely.
-* **Inputs (3 total):**
-    * `model_id`: `str` | Dimensions: Scalar string identifying the Hugging Face repository tag.
-    * `dtype`: `torch.dtype` | Dimensions: PyTorch memory format object passed from `detect_device()`.
-    * `device_label`: `str` | Dimensions: Scalar string (Default: `"cpu"`) used for terminal reporting.
-* **Outputs (1 tuple containing 2 elements OR `None, None` if failed):**
-    * `processor`: `transformers.AutoProcessor` | Dimensions: The complex neural tokenization and image processing object.
-    * `model`: `transformers.AutoModelForMultimodalLM` | Dimensions: The massive multi-gigabyte neural network graph loaded into system memory.
+## Local model
+
+The project also supports local Gemma inference through **LiteRT-LM**.
+
+This allows comparison between:
+
+```text
+Cloud multimodal inference
+vs.
+Local multimodal inference
+```
+
+The local model is cached after download/setup.
 
 ---
 
-### 3. `append_to_report`
-* **Syntax:** `append_to_report(report_path, text_content)`
-* **Core Description:** A continuous writing and backup mechanism. It opens the designated master log document in append mode (`"a"`), ensuring that new AI-generated event descriptions are safely stacked on top of historical data without overwriting the file.
-* **Inputs (2 total):**
-    * `report_path`: `str` | Dimensions: Scalar string defining the master `.txt` output location.
-    * `text_content`: `str` | Dimensions: Scalar string containing the formatted AI evaluation payload.
-* **Outputs (None):**
-    * Returns nothing. Streams encoded UTF-8 text directly to the local storage drive.
+# 11. Structured Vehicle Registry
+
+The final output is stored in:
+
+```text
+Vehicle_Registry_Master.xlsx
+```
+
+Depending on available detections and model outputs, the registry contains information including:
+
+- Vehicle ID
+- entry / exit timing
+- truck classification information
+- truck image
+- plate image
+- OCR output
+- cloud Gemma analysis
+- local Gemma analysis
+
+The Excel output can be downloaded directly from the web interface.
 
 ---
 
-### 4. `extract_segment_storyboard`
-* **Syntax:** `extract_segment_storyboard(video_path, interval, max_frames=20)`
-* **Core Description:** This function maps continuous video into a digestible visual grid for the LLM. It calculates the specific duration of a clip, pulls frames at strict intervals, converts them from OpenCV BGR to native RGB, and executes a critical VRAM defense limit (`max_frames`) to stop the GPU from experiencing an out-of-memory crash.
-* **Inputs (3 total):**
-    * `video_path`: `str` | Dimensions: Scalar string targeting the physical `.mp4` segment.
-    * `interval`: `float` | Dimensions: Scalar float representing the extraction step time in seconds.
-    * `max_frames`: `int` | Dimensions: Scalar integer (Default: `20`) acting as the hard ceiling for tensor array allocations.
-* **Outputs (1 tuple containing 2 elements):**
-    * `images`: `list` | Dimensions: A 1D array containing `N` extracted `PIL.Image` objects (where `N` $\le$ `max_frames`).
-    * `duration`: `float` | Dimensions: Scalar float representing the total calculated seconds of the segment.
+# 12. Annotated Video Output
+
+Detected trucks are drawn on output video segments.
+
+OpenCV initially writes the video and FFmpeg is used to re-encode the result into a browser-friendly H.264 format.
+
+FFmpeg therefore needs to be available when running the project natively.
+
+Check with:
+
+```bash
+ffmpeg -version
+```
+
+If FFmpeg is unavailable, the pipeline falls back to the raw OpenCV video output, although browser playback may not work correctly.
+
+Docker installs FFmpeg automatically.
 
 ---
 
-### 5. `run_gemma_inference`
-* **Syntax:** `run_gemma_inference(processor, model, snapshot_slideshow, core_prompt, device, dtype)`
-* **Core Description:** The master multimodal inference engine. It constructs the chat template, interleaves the visual storyboard with the text prompt, casts the input tensors into the correct precision limits, passes them through the neural network with gradient tracking disabled (`torch.no_grad()`), and decodes the resulting sequence into plain English.
-* **Inputs (6 total):**
-    * `processor`: `transformers.AutoProcessor` | Dimensions: The initialized model tokenizer.
-    * `model`: `transformers.AutoModelForMultimodalLM` | Dimensions: The initialized generative model graph.
-    * `snapshot_slideshow`: `list` | Dimensions: A 1D list of `PIL.Image` visual arrays.
-    * `core_prompt`: `str` | Dimensions: Scalar string containing your strict evaluation rules.
-    * `device`: `str` | Dimensions: Scalar string (e.g., `"cuda"`).
-    * `dtype`: `torch.dtype` | Dimensions: PyTorch numeric formatting rules.
-* **Outputs (1 total):**
-    * `gemma_text`: `str` | Dimensions: A heavily detailed scalar text string containing the AI's chronological analysis of the video segment.
+# 13. FastAPI Web Application
+
+The project uses **FastAPI** as its application backend.
+
+The official application entry point is:
+
+```text
+app.py
+```
+
+For development:
+
+```bash
+python -m uvicorn app:app --reload
+```
+
+The web interface is then available at:
+
+```text
+http://127.0.0.1:8000
+```
 
 ---
 
-### 6. `purge_gpu_memory`
-* **Syntax:** `purge_gpu_memory()`
-* **Core Description:** A low-level system garbage collection protocol. It forcibly clears orphaned computational graph tensors and flushes the PyTorch CUDA cache allocator, completely resetting the GPU environment so the next video segment processes on a clean, empty slate.
-* **Inputs (0 total):**
-    * Takes no arguments.
-* **Outputs (None):**
-    * Returns nothing. Triggers low-level hardware cache flush operations.
+# 14. Background Processing
 
+Video processing is performed as a background task.
 
+The upload flow is:
 
+```text
+Browser uploads video
+        ↓
+Server generates job ID
+        ↓
+Video is validated
+        ↓
+Browser immediately receives job ID
+        ↓
+Full AI pipeline continues in background
+```
 
+This prevents the upload request itself from remaining blocked for the entire processing duration.
+
+---
+
+# 15. Live Progress with Server-Sent Events
+
+The frontend receives live pipeline progress through **Server-Sent Events (SSE)**.
+
+This allows the UI to show stages such as:
+
+```text
+Segmentation
+    ↓
+Slicing
+    ↓
+Detection
+    ↓
+Description
+    ↓
+Complete
+```
+
+SSE was used because progress communication mainly travels from:
+
+```text
+server → browser
+```
+
+and therefore does not require the complexity of a full WebSocket connection.
+
+---
+
+# 16. Job-Isolated Storage
+
+Every uploaded video receives a unique job ID.
+
+Example:
+
+```text
+45392bdb
+```
+
+Files belonging to the job are stored under:
+
+```text
+storage/jobs/45392bdb/
+```
+
+A typical job directory looks like:
+
+```text
+storage/
+└── jobs/
+    └── <job_id>/
+        ├── raw/
+        │   └── input_video.mp4
+        │
+        ├── segment_timestamps.xlsx
+        │
+        ├── trial_video_segments/
+        │   └── ...
+        │
+        ├── temp/
+        │
+        └── final_assets/
+            ├── Vehicle_Registry_Master.xlsx
+            ├── truck_crops/
+            ├── plate_crops/
+            └── annotated_segments/
+```
+
+Job IDs and generated storage paths are validated to reduce path-traversal risks.
+
+Old jobs are automatically cleaned from local storage after the configured retention period.
+
+---
+
+# 17. Upload Safety
+
+Uploaded filenames are sanitized before being written to disk.
+
+The API only accepts configured video extensions:
+
+```text
+.mp4
+.avi
+.mov
+.mkv
+```
+
+The storage layer also validates:
+
+- job IDs
+- relative paths
+- storage-path containment
+
+to prevent generated paths from escaping the intended job directory.
+
+---
+
+# 18. Frontend
+
+The browser interface provides:
+
+- drag-and-drop video upload
+- pipeline stage visualization
+- live progress updates
+- vehicle result preview
+- truck image preview
+- plate image preview
+- annotated video access
+- Excel result download
+
+The frontend communicates with the FastAPI backend through `/api/...` routes.
+
+---
+
+# Main API Routes
+
+Important API routes include:
+
+```text
+POST /api/upload
+```
+
+Uploads and validates a video and starts background processing.
+
+```text
+GET /api/stream/{job_id}
+```
+
+Streams live pipeline progress using Server-Sent Events.
+
+```text
+GET /api/preview/{job_id}
+```
+
+Returns the generated vehicle registry as browser-readable JSON.
+
+```text
+GET /api/download/{job_id}
+```
+
+Downloads the generated Excel report.
+
+Additional routes serve generated truck crops, plate images, and annotated videos.
+
+---
+
+# 19. Benchmarking
+
+The repository includes:
+
+```text
+benchmark_videos.py
+```
+
+for benchmarking the complete pipeline.
+
+The benchmark measures values such as:
+
+- preprocessing time
+- segmentation time
+- slicing time
+- detection time
+- description time
+- total processing time
+- average CPU usage
+- peak CPU usage
+- average RAM usage
+- peak RAM usage
+- Docker/container memory when available
+- effective detection FPS
+- real-time factor
+
+It can also compare different combinations of:
+
+```text
+FP32 / FP16 / INT8
+```
+
+and:
+
+```text
+LATENCY / THROUGHPUT
+```
+
+performance hints.
+
+Example concept:
+
+```text
+Real-Time Factor =
+total processing time / video duration
+```
+
+Interpretation:
+
+```text
+< 1  : faster than real time
+= 1  : real time
+> 1  : slower than real time
+```
+
+---
+
+# Project Structure
+
+```text
+video-gemma4/
+│
+├── app.py
+├── main.py
+│
+├── routers/
+│   ├── __init__.py
+│   ├── frontend.py
+│   └── pipeline.py
+│
+├── storage.py
+├── progress.py
+├── video_preprocess.py
+│
+├── step_1_segmentation.py
+├── step_1_functions_segmentation.py
+│
+├── step_2_video_slice_excel_timestamp.py
+├── step_2_functions_video_slice_excel_timestamp.py
+│
+├── step_3_yoloXs_images.py
+├── step_3_functions_yoloXs_images.py
+│
+├── step_4_prompt_document.py
+├── step_4_functions_prompt_document.py
+│
+├── benchmark_videos.py
+├── resource_monitor.py
+│
+├── create_model_variants.py
+├── build_calibration_data.py
+├── quantize_int8.py
+│
+├── index.html
+├── index.css
+│
+├── weights/
+├── storage/
+│
+├── requirements.txt
+├── .env.example
+├── .gitignore
+├── .dockerignore
+│
+├── Dockerfile
+├── docker-compose.yml
+│
+├── LICENSE
+└── README.md
+```
+
+---
+
+# Technologies Used
+
+### Machine Learning / Computer Vision
+
+- YOLOX-S
+- OpenVINO
+- NNCF
+- PaddleOCR
+- OpenCV
+- NumPy
+- SciPy
+
+### Multimodal / LLM
+
+- Gemma
+- OpenRouter
+- LiteRT-LM
+- Hugging Face
+
+### Backend
+
+- FastAPI
+- Python
+- Server-Sent Events
+- background tasks
+
+### Data / Reporting
+
+- Pandas
+- OpenPyXL
+- Excel
+
+### Deployment
+
+- Docker
+- Docker Compose
+- FFmpeg
+
+---
+
+# Installation
+
+## Option 1 — Docker
+
+Docker is the recommended setup because the project depends on Python packages, FFmpeg, machine-learning runtimes, and model caches.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/bhuvanesh-o/video-gemma4.git
+cd video-gemma4
+```
+
+### 2. Create the environment file
+
+Linux/macOS:
+
+```bash
+cp .env.example .env
+```
+
+Windows:
+
+```powershell
+copy .env.example .env
+```
+
+### 3. Edit `.env`
+
+Example:
+
+```env
+OPENROUTER_API_KEY=
+HF_TOKEN=
+
+MODEL_PRECISION=FP32
+OPENVINO_PERFORMANCE_HINT=THROUGHPUT
+NUM_INFER_REQUESTS=4
+```
+
+### 4. Start the application
+
+```bash
+docker compose up --build
+```
+
+### 5. Open the web interface
+
+```text
+http://localhost:8000
+```
+
+---
+
+# Docker Storage
+
+The Docker configuration maps:
+
+```text
+./storage  → /app/storage
+./weights  → /app/weights
+```
+
+Therefore uploaded videos, model files, and generated results remain available on the host machine even if the container is stopped.
+
+Model caches use Docker named volumes:
+
+```text
+huggingface_cache
+litert_cache
+paddle_cache
+```
+
+This avoids re-downloading large model files every time the container restarts.
+
+---
+
+# Option 2 — Local Python Setup
+
+### 1. Clone
+
+```bash
+git clone https://github.com/bhuvanesh-o/video-gemma4.git
+cd video-gemma4
+```
+
+### 2. Create a virtual environment
+
+Windows:
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+```
+
+Linux/macOS:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 4. Install FFmpeg
+
+FFmpeg must be available on the system PATH.
+
+Verify:
+
+```bash
+ffmpeg -version
+```
+
+### 5. Create `.env`
+
+```env
+OPENROUTER_API_KEY=
+HF_TOKEN=
+
+MODEL_PRECISION=FP32
+OPENVINO_PERFORMANCE_HINT=THROUGHPUT
+NUM_INFER_REQUESTS=4
+```
+
+### 6. Run
+
+```bash
+python -m uvicorn app:app --reload
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+---
+
+# Environment Variables
+
+| Variable | Example | Purpose |
+|---|---|---|
+| `OPENROUTER_API_KEY` | `...` | Enables cloud Gemma analysis |
+| `HF_TOKEN` | `...` | Hugging Face model access when required |
+| `MODEL_PRECISION` | `FP32` | `FP32`, `FP16`, or `INT8` |
+| `OPENVINO_PERFORMANCE_HINT` | `THROUGHPUT` | `THROUGHPUT` or `LATENCY` |
+| `NUM_INFER_REQUESTS` | `4` | Number of asynchronous OpenVINO requests |
+
+Never commit the real `.env` file.
+
+Use:
+
+```text
+.env.example
+```
+
+as the public template.
+
+---
+
+# First Run
+
+The first run may be slower because some model assets need to be downloaded or prepared.
+
+Examples include:
+
+- YOLOX-S model weights
+- PaddleOCR detection model
+- PaddleOCR recognition model
+- local Gemma model assets
+- OpenVINO compiled/cache files
+
+Later runs reuse cached files.
+
+An internet connection is therefore recommended for initial setup.
+
+Messages such as:
+
+```text
+Model files already exist. Using cached files.
+```
+
+from PaddleOCR are normal and indicate that cached model files are being reused.
+
+A Paddle warning about `ccache` is also not required for normal inference.
+
+---
+
+# Running INT8
+
+To use INT8:
+
+```env
+MODEL_PRECISION=INT8
+```
+
+Ensure these files exist:
+
+```text
+weights/yolox_small_int8.xml
+weights/yolox_small_int8.bin
+```
+
+If they have not been generated yet, run the model preparation and quantization scripts.
+
+---
+
+# Running FP16
+
+```env
+MODEL_PRECISION=FP16
+```
+
+The FP16 OpenVINO model is prepared from the YOLOX-S ONNX model if required.
+
+---
+
+# Running FP32
+
+```env
+MODEL_PRECISION=FP32
+```
+
+FP32 is useful as the baseline precision for comparison and benchmarking.
+
+---
+
+# Important Notes
+
+## Single-worker FastAPI
+
+Live job progress is currently stored in process memory.
+
+For this reason, use a single Uvicorn worker:
+
+```bash
+python -m uvicorn app:app --host 0.0.0.0 --port 8000 --workers 1
+```
+
+Using multiple workers would require moving job-progress state to a shared system such as Redis or a database.
+
+---
+
+## OpenRouter
+
+The OpenRouter API key is optional.
+
+Without it, cloud Gemma analysis is skipped.
+
+Never commit API keys to GitHub.
+
+---
+
+## INT8 Quantization
+
+INT8 is generated through post-training quantization using representative calibration frames.
+
+Calibration data should ideally be separate from final benchmark/evaluation videos.
+
+---
+
+# Known Limitations
+
+This project is currently intended as a research/demo pipeline rather than a production traffic-enforcement system.
+
+Current limitations include:
+
+- CPU-focused deployment
+- in-memory live progress state
+- single-worker web deployment
+- PaddleOCR/model assets may require internet on first run
+- local Gemma inference can be computationally expensive
+- model accuracy depends strongly on camera angle, resolution, lighting, and traffic conditions
+- heuristic vehicle attributes should not be treated as certified physical measurements
+- INT8 performance and accuracy can vary depending on calibration data and hardware
+
+---
+
+# Security / Repository Hygiene
+
+The project includes protections for:
+
+- sanitized uploaded filenames
+- allowed video extensions
+- validated job IDs
+- storage path containment
+- isolated per-job directories
+- automatic cleanup of old job data
+- `.env` exclusion from Git
+- generated weights/output exclusion where appropriate
+- `.dockerignore` to prevent local secrets and unnecessary files from being copied into Docker images
+
+---
+
+# Future Improvements
+
+Potential future work includes:
+
+- further OpenVINO inference optimization
+- improved model accuracy benchmarking
+- automatic distribution/download of the prebuilt INT8 model
+- more robust license-plate detection
+- improved multi-object tracking
+- shared job state for multi-worker deployment
+- persistent job queues
+- cloud/object-storage support
+- stronger automated evaluation across FP32, FP16, and INT8
+
+---
+
+# License
+
+The project code is licensed under the **MIT License**.
+
+See:
+
+```text
+LICENSE
+```
+
+for details.
+
+Third-party libraries, models, and model weights such as YOLOX, PaddleOCR, OpenVINO, Gemma, and LiteRT are subject to their respective licenses and terms.
+
+---
+
+# Author
+
+**Bhuvanesh O**
+
+GitHub: https://github.com/bhuvanesh-o
+
+---
+
+## Disclaimer
+
+This project was developed for experimentation and research in traffic-video analytics, model optimization, multimodal AI, and ML-system deployment.
+
+Outputs generated by OCR, object detection, heuristics, or multimodal language models may contain errors and should not be used as the sole basis for legal, safety-critical, or enforcement decisions.

@@ -90,7 +90,7 @@ def run_26b_a4b(client, image_path):
 
 
 
-def run_e2b_litert(image_path, retries=3):
+def run_e2b_litert(image_path, retries=1):
 
     """
     Wraps call_litert_e2b() (ONE subprocess call) with ITS OWN retry loop —

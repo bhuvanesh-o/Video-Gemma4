@@ -30,7 +30,7 @@ REFACTOR NOTE 3 (structured events): every emit() call below now also passes
 stage="detection" and a short ui_message for the frontend's narrative UI.
 
 NOTE: Before running, in your terminal:
-    pip install paddlepaddle paddleocr onnxruntime pandas openpyxl opencv-python numpy
+    pip install paddlepaddle paddleocr pandas openpyxl opencv-python numpy
 
 The YOLOX-S ONNX weights are auto-downloaded into ONNX_PATH on first run if
 missing — no manual `!wget` needed.
@@ -43,6 +43,7 @@ same folder as this script (or somewhere on your PYTHONPATH) so the imports belo
 """
 import os
 import shutil
+from xml.parsers.expat import model
 import pandas as pd
 import cv2
 import subprocess
@@ -52,13 +53,14 @@ import openvino.properties as props
 
 from step_3_functions_yoloXs_images import (
     ensure_yolox_weights,
+    ensure_openvino_variant,
     load_yolox_session,
     run_detection_tracking,
     merge_broken_tracks,
     compile_segment_database,
     save_vehicle_registry,
 )
-from storage import path_for, dir_for
+from storage import BASE_DIR, path_for, dir_for
 from progress import emit
 
 
@@ -72,9 +74,42 @@ def main(job_id, model_precision = None, performance_hint=None):
     TIMESTAMPS_EXCEL = path_for(job_id, "segment_timestamps.xlsx")
     SEGMENT_DIR      = dir_for(job_id, "trial_video_segments")
     ASSET_DIR        = dir_for(job_id, "final_assets")
-    ONNX_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small.onnx")
-    INT8_PATH        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "weights", "yolox_small_int8.xml")
-    TEMP_DIR         = dir_for(job_id, "temp")
+
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    WEIGHTS_DIR = os.path.join(BASE_DIR, "weights")
+
+
+    os.makedirs(WEIGHTS_DIR, exist_ok=True)
+
+    YOLOX_WEIGHTS_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
+
+
+
+    ONNX_PATH = os.path.join(
+        WEIGHTS_DIR,
+        "yolox_small.onnx",
+    )
+
+    FP32_PATH = os.path.join(
+        WEIGHTS_DIR,
+        "yolox_small_fp32.xml",
+    )
+
+    FP16_PATH = os.path.join(
+        WEIGHTS_DIR,
+        "yolox_small_fp16.xml",
+    )
+
+    INT8_PATH = os.path.join(
+        WEIGHTS_DIR,
+        "yolox_small_int8.xml",
+    )
+
+    TEMP_DIR = dir_for(job_id, "temp")
+
+
+
+
 
     # 🧠 1B: DETECTOR INPUT CORE SETTINGS
     # ------------------------------------------------------------------------------
@@ -85,14 +120,69 @@ def main(job_id, model_precision = None, performance_hint=None):
     # small accuracy tradeoff). INT8 requires weights/yolox_small_int8.xml to
     # already exist — run build_calibration_data.py + quantize_int8.py first.
 
-    MODEL_PRECISION = "INT8"   # "FP32" or "INT8"
+    MODEL_PRECISION = (
+        model_precision
+        or os.getenv("MODEL_PRECISION", "FP32")
+    ).upper()
 
-    MODEL_PATH = INT8_PATH if MODEL_PRECISION == "INT8" else ONNX_PATH
-    if MODEL_PRECISION == "INT8" and not os.path.exists(INT8_PATH):
-        raise FileNotFoundError(
-            f"{INT8_PATH} not found. Run build_calibration_data.py then quantize_int8.py "
-            f"first, or set MODEL_PRECISION back to 'FP32'."
+
+
+    VALID_PRECISIONS = {"FP32", "FP16", "INT8"}
+
+    if MODEL_PRECISION not in VALID_PRECISIONS:
+        raise ValueError(
+            f"Invalid MODEL_PRECISION={MODEL_PRECISION}. "
+            f"Choose one of {sorted(VALID_PRECISIONS)}."
         )
+
+
+
+
+    # Make sure the original ONNX model exists first
+    ensure_yolox_weights(
+        ONNX_PATH,
+        YOLOX_WEIGHTS_URL,
+        job_id=job_id,
+    )
+
+    if MODEL_PRECISION == "FP32":
+
+        ensure_openvino_variant(
+            ONNX_PATH,
+            FP32_PATH,
+            compress_to_fp16=False,
+            job_id=job_id,
+        )
+
+        MODEL_PATH = FP32_PATH
+
+
+    elif MODEL_PRECISION == "FP16":
+
+        ensure_openvino_variant(
+            ONNX_PATH,
+            FP16_PATH,
+            compress_to_fp16=True,
+            job_id=job_id,
+        )
+
+        MODEL_PATH = FP16_PATH
+
+
+    else:  # INT8
+
+        INT8_BIN_PATH = os.path.splitext(INT8_PATH)[0] + ".bin"
+
+        if not os.path.exists(INT8_PATH) or not os.path.exists(INT8_BIN_PATH):
+            raise FileNotFoundError(
+                "Prebuilt INT8 YOLOX model not found.\n"
+                f"Expected:\n"
+                f"  {INT8_PATH}\n"
+                f"  {INT8_BIN_PATH}\n"
+                "Download the prebuilt INT8 model or set MODEL_PRECISION=FP32."
+            )
+
+        MODEL_PATH = INT8_PATH
 
     # 🎯 1C: DETECTOR CONFIDENCE HYPER-PARAMETERS
     # ------------------------------------------------------------------------------
@@ -233,7 +323,6 @@ def main(job_id, model_precision = None, performance_hint=None):
     os.makedirs(os.path.join(ASSET_DIR, "annotated_segments"), exist_ok=True)
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    YOLOX_WEIGHTS_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_s.onnx"
     ensure_yolox_weights(ONNX_PATH, YOLOX_WEIGHTS_URL, job_id=job_id)
 
     # ==============================================================================
@@ -242,7 +331,14 @@ def main(job_id, model_precision = None, performance_hint=None):
     emit(f"🚀 Loading YOLOX-S via OpenVINO ({MODEL_PRECISION}, CPU)...", job_id=job_id,
          stage="detection", ui_message="Loading the truck detection model...")
     OPENVINO_DEVICE = "CPU"
-    PERFORMANCE_HINT = performance_hint or "THROUGHPUT"   # 👈 THIS is the switch — change "LATENCY" to "THROUGHPUT" here, or pass it in from the caller
+
+    PERFORMANCE_HINT = (
+        performance_hint
+        or os.getenv(
+            "OPENVINO_PERFORMANCE_HINT",
+            "THROUGHPUT",
+        )
+    ).upper()
 
 
     def check_optimal_requests(compiled_model, job_id=None):
@@ -262,15 +358,17 @@ def main(job_id, model_precision = None, performance_hint=None):
     # concretely. Only compiled_model above is shared, via get_compiled_model's
     # lru_cache from #6.
 
-    '''
-    infer_request_a = compiled_model.create_infer_request()
-    infer_request_b = compiled_model.create_infer_request()
-    '''
+
 
 
     # matches (or was chosen based on) the optimal_number_of_infer_requests query above — see 
     # check_optimal_requests()'s printed output for your specific hardware/hint combo
-    NUM_INFER_REQUESTS = 4
+    NUM_INFER_REQUESTS = int(
+        os.getenv(
+            "NUM_INFER_REQUESTS",
+            "4",
+        )
+    )
 
 
     infer_requests = [
@@ -285,6 +383,16 @@ def main(job_id, model_precision = None, performance_hint=None):
     # for a one-off check — e.g. temporarily inside load_yolox_session(), or
     # as a tiny standalone script.
 
+
+    '''
+
+    ov.save_model(
+        model,
+        ir_path,
+        compress_to_fp16=False,
+    )
+
+    '''
     
 
 

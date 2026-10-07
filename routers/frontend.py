@@ -6,10 +6,16 @@ This is intentionally the smallest router in the app — it exists purely so
 app.py doesn't need to know about file I/O or HTML at all, matching the
 same "app.py just wires routers together" philosophy as routers/pipeline.py.
 """
+
+from pathlib import Path
+
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=["frontend"])
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+INDEX_FILE = BASE_DIR / "index.html"
 
 
 @router.get("/")
@@ -20,5 +26,8 @@ async def serve_ui():
     immediately, no server restart needed. Fine for a dev/demo-scale app;
     would be worth caching if this ever needed to handle high request volume.
     """
-    with open("index.html", "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
+    return HTMLResponse(
+        INDEX_FILE.read_text(
+            encoding="utf-8"
+        )
+    )

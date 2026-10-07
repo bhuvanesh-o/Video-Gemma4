@@ -1,50 +1,54 @@
-# ── Python ──────────────────────────────────────────────────────────────────
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 
-# ── Virtual environment ──────────────────────────────────────────────────────
+# Virtual environments
 venv/
 .venv/
 env/
 
-# Large generated artifacts — regenerate locally, never commit
-calibration_frames.npy
-*.onnx
-*.xml
-*.bin
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Generated job output
 storage/jobs/
+storage/archive/
 
-# ── Source videos & sliced segments (large media, regenerable from source) ──
-*.mp4
-*.avi
-*.mov
-*.mkv
+# Generated/model weights
+weights/*
+!weights/.gitkeep
 
-# ── Generated images (diagnostic plots + truck/plate crops) ─────────────────
-*.png
-*.jpg
-*.jpeg
-
-# ── Generated data outputs (regenerated each run, not source-of-truth code) ─
-segment_timestamps.xlsx
-Vehicle_Registry_Master.xlsx
-LLM_Analysis_Report_Gemma4.txt
+# Calibration / generated data
+calibration_frames.npy
 *.xlsx
 *.csv
 
-# ── Pipeline scratch/output folders ──────────────────────────────────────────
+# Local benchmark videos
+test_videos/
+test_videos_1/
+calibration_videos/
+evaluation_videos/
+
+# Temporary pipeline output
 temp/
 final_assets/
 trial_video_segments/
-storage/
-weights/
 
-# ── Secrets, if you ever add any back ────────────────────────────────────────
-.env
-credentials.json
-token.pickle
-
-# for my rough
+# Development scratch files
 rough.py
 rough.html
 
-.npy
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test caches
+.pytest_cache/
+.ruff_cache/
+.coverage

@@ -1,104 +1,235 @@
 # resource_monitor.py
 """
-Samples CPU% and RAM usage of the current process (and its children — matters
-because cv2/onnx/openvino can spawn worker threads/processes) at a fixed
-interval on a background thread, so it doesn't block or slow down the actual
-pipeline it's watching.
+Samples CPU and RAM for the current process + children, and reports EXACT
+peak RAM (kernel high-water-mark) instead of an approximation from sampling.
 
-Used throughout benchmark_videos.py — one ResourceMonitor instance per
-pipeline stage, so per-stage CPU/RAM numbers can be compared independently
-(preprocessing vs segmentation vs slicing vs detection vs description), plus
-one instance wrapping the entire run for overall totals.
+WHY THIS CHANGED: the old approach sampled CURRENT RAM every `interval`
+seconds and took max(samples) as "peak" -- that misses any spike that rises
+and falls between two samples. This version instead reads kernel-tracked
+monotonic high-water-mark values, which can't miss a spike no matter when
+you read them:
+
+  - Per-process peak: Linux's /proc/<pid>/status -> VmHWM field.
+  - Container-wide peak: cgroup v2's memory.peak / v1's memory.max_usage_in_bytes.
+
+LIMITATION: only available on Linux (i.e. inside Docker). Native Windows has
+no equivalent exposed here, so it falls back to the old sampled-max approach
+there -- container peak stays None on Windows either way, same as before.
+
+LIMITATION (process-tree peak specifically): a child that starts AND exits
+entirely between samples can still be missed. Once a tracked process exits,
+its LAST KNOWN VmHWM is kept (not discarded) and included in the running
+sum -- so short-lived children's peak contribution isn't lost, though the
+summed total is a robust upper bound rather than "everyone peaked at this
+exact same instant" (different processes can peak at different times).
 """
-import psutil
-import threading
-import time
+
 import os
+import time
+import threading
+import psutil
+
+
+def _read_int_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
 
 
 class ResourceMonitor:
-    def __init__(self, interval=0.5):
-        """
-        interval: how often (in seconds) to take a sample. Smaller interval =
-        finer-grained data but more overhead; 0.5s is the default used for
-        whole-pipeline monitoring, 0.2s is used for shorter individual stages
-        in benchmark_videos.py so short stages still get enough samples to
-        average meaningfully.
-        """
-        self.interval = interval
-        self.process = psutil.Process(os.getpid())
-        self.samples = []  # list of (timestamp, cpu_percent, ram_mb)
-        self._stop_flag = threading.Event()
-        self._thread = None
+    """
+    samples: (timestamp, cpu_percent, process_tree_ram_mb_CURRENT, container_ram_mb_CURRENT_or_None)
+    These sampled "current" values still back AVERAGE reporting (an average
+    genuinely needs periodic samples). PEAKS come from:
+        .exact_peak_process_tree_ram_mb
+        .exact_peak_container_ram_mb
+    """
 
-    def _sample_loop(self):
-        """
-        Runs on its own background thread (started by start()). Loops until
-        stop() sets _stop_flag, sleeping `interval` seconds between samples.
-        """
-        # First call to cpu_percent() always returns 0.0 — it needs a baseline.
-        # Calling it once here "primes" it before the real sampling starts.
-        self.process.cpu_percent(interval=None)
-        for child in self.process.children(recursive=True):
+    def __init__(self, interval=0.5):
+        self.interval = interval
+        self.samples = []
+
+        self._running = False
+        self._thread = None
+        self._known_processes = {}
+
+        # pid -> last known VmHWM (MB), kept even after the process exits.
+        self._last_known_vmhwm_mb = {}
+
+        self.exact_peak_process_tree_ram_mb = 0.0
+        self.exact_peak_container_ram_mb = None
+
+        try:
+            self._root_process = psutil.Process(os.getpid())
+        except psutil.Error:
+            self._root_process = None
+
+    # ------------------------------------------------------------------
+    # Process tree
+    # ------------------------------------------------------------------
+
+    def _get_process_tree(self):
+        if self._root_process is None:
+            return []
+        processes = []
+        try:
+            if self._root_process.is_running():
+                processes.append(self._root_process)
+            processes.extend(self._root_process.children(recursive=True))
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            pass
+        return processes
+
+    # ------------------------------------------------------------------
+    # RAM of Python + children (CURRENT usage, for averages only)
+    # ------------------------------------------------------------------
+
+    def _get_process_tree_ram_mb(self, processes):
+        total_bytes = 0
+        for process in processes:
             try:
-                child.cpu_percent(interval=None)
-            except psutil.NoSuchProcess:
+                total_bytes += process.memory_info().rss
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        return total_bytes / (1024 ** 2)
+
+    # ------------------------------------------------------------------
+    # EXACT per-process peak RSS (Linux high-water mark)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_process_peak_rss_mb(pid):
+        """Reads VmHWM from /proc/<pid>/status -- kernel's own monotonic
+        peak-RSS record for this process. Linux-only; None elsewhere."""
+        try:
+            with open(f"/proc/{pid}/status", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        return int(line.split()[1]) / 1024.0  # kB -> MB
+        except (OSError, ValueError, IndexError):
+            return None
+        return None
+
+    def _update_exact_process_tree_peak(self, processes):
+        for process in processes:
+            try:
+                peak_mb = self._get_process_peak_rss_mb(process.pid)
+                if peak_mb is not None:
+                    self._last_known_vmhwm_mb[process.pid] = peak_mb
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 pass
 
-        start = time.time()
-        while not self._stop_flag.is_set():
-            time.sleep(self.interval)
+        if self._last_known_vmhwm_mb:
+            self.exact_peak_process_tree_ram_mb = sum(self._last_known_vmhwm_mb.values())
+
+    # ------------------------------------------------------------------
+    # CPU of Python + children (unchanged from before)
+    # ------------------------------------------------------------------
+
+    def _get_process_tree_cpu_percent(self, processes):
+        current_pids = set()
+        total_cpu = 0.0
+        for process in processes:
             try:
-                # cpu_percent() here is % of ONE core; can exceed 100% if
-                # multi-threaded (e.g. 350% = using 3.5 cores worth of work)
-                cpu = self.process.cpu_percent(interval=None)
-                mem_mb = self.process.memory_info().rss / (1024 * 1024)
+                pid = process.pid
+                current_pids.add(pid)
+                if pid not in self._known_processes:
+                    self._known_processes[pid] = process
+                    process.cpu_percent(interval=None)
+                    continue
+                total_cpu += self._known_processes[pid].cpu_percent(interval=None)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
 
-                # Include child processes (OpenVINO/cv2 may spawn worker threads
-                # or subprocesses depending on backend — this catches those too).
-                # Also relevant now for step_4's litert-lm subprocess: since
-                # this recursively walks children(), a ResourceMonitor wrapping
-                # the whole Step 4 call automatically captures the litert-lm
-                # child process's CPU/RAM too, with no extra code needed.
-                for child in self.process.children(recursive=True):
-                    try:
-                        cpu += child.cpu_percent(interval=None)
-                        mem_mb += child.memory_info().rss / (1024 * 1024)
-                    except psutil.NoSuchProcess:
-                        continue
+        dead_pids = [pid for pid in self._known_processes if pid not in current_pids]
+        for pid in dead_pids:
+            self._known_processes.pop(pid, None)
+        return total_cpu
 
-                self.samples.append((time.time() - start, cpu, mem_mb))
-            except psutil.NoSuchProcess:
-                break
+    # ------------------------------------------------------------------
+    # Docker container RAM -- current (avg) and TRUE peak
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_container_ram_mb():
+        """CURRENT container memory usage -- for average reporting only."""
+        for path in ("/sys/fs/cgroup/memory.current",
+                     "/sys/fs/cgroup/memory/memory.usage_in_bytes"):
+            if os.path.exists(path):
+                value = _read_int_file(path)
+                if value is not None:
+                    return value / (1024 ** 2)
+        return None
+
+    @staticmethod
+    def _get_container_peak_ram_mb():
+        """TRUE peak container RAM since cgroup creation -- kernel-tracked,
+        not sampled/estimated at all. None outside a real cgroup."""
+        for path in ("/sys/fs/cgroup/memory.peak",
+                     "/sys/fs/cgroup/memory/memory.max_usage_in_bytes"):
+            if os.path.exists(path):
+                value = _read_int_file(path)
+                if value is not None:
+                    return value / (1024 ** 2)
+        return None
+
+    # ------------------------------------------------------------------
+    # Sampling
+    # ------------------------------------------------------------------
+
+    def _sample_once(self):
+        processes = self._get_process_tree()
+
+        cpu_pct = self._get_process_tree_cpu_percent(processes)
+        ram_mb = self._get_process_tree_ram_mb(processes)
+        container_ram_mb = self._get_container_ram_mb()
+
+        self._update_exact_process_tree_peak(processes)
+
+        container_peak = self._get_container_peak_ram_mb()
+        if container_peak is not None:
+            self.exact_peak_container_ram_mb = container_peak
+
+        self.samples.append((time.time(), cpu_pct, ram_mb, container_ram_mb))
+
+    def _run(self):
+        while self._running:
+            self._sample_once()
+            time.sleep(self.interval)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def start(self):
-        """Starts the sampling loop on a daemon thread — daemon=True means it
-        won't prevent the main program from exiting even if stop() is never called."""
-        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        if self._running:
+            return
+        self.samples = []
+        self._known_processes = {}
+        self._last_known_vmhwm_mb = {}
+        self.exact_peak_process_tree_ram_mb = 0.0
+        self.exact_peak_container_ram_mb = None
+
+        for process in self._get_process_tree():
+            try:
+                process.cpu_percent(interval=None)
+                self._known_processes[process.pid] = process
+            except psutil.Error:
+                pass
+
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
-        """Signals the sampling loop to stop and waits for the thread to finish."""
-        self._stop_flag.set()
-        if self._thread:
-            self._thread.join()
-
-    def summary(self):
-        """Returns a human-readable multi-line string summarizing avg/peak CPU and RAM."""
-        if not self.samples:
-            return "No samples collected."
-        cpu_vals = [s[1] for s in self.samples]
-        mem_vals = [s[2] for s in self.samples]
-        return (
-            f"Duration sampled: {self.samples[-1][0]:.1f}s over {len(self.samples)} samples\n"
-            f"CPU%  -> avg: {sum(cpu_vals)/len(cpu_vals):.1f}%  peak: {max(cpu_vals):.1f}%\n"
-            f"RAM MB -> avg: {sum(mem_vals)/len(mem_vals):.1f} MB  peak: {max(mem_vals):.1f} MB"
-        )
-
-    def save_csv(self, path="resource_log.csv"):
-        """Dumps every raw sample (elapsed_sec, cpu_percent, ram_mb) to a CSV file."""
-        import csv
-        with open(path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["elapsed_sec", "cpu_percent", "ram_mb"])
-            writer.writerows(self.samples)
+        if not self._running:
+            return
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self.interval * 2))
+        try:
+            self._sample_once()
+        except Exception:
+            pass

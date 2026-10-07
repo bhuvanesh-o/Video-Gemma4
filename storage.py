@@ -24,10 +24,24 @@ import shutil
 
 import time
 
+import re
+
 # Always anchored to wherever THIS file physically lives, regardless of
 # what folder VS Code/the terminal happens to be "in" when you run things.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STORAGE_ROOT = os.path.join(BASE_DIR, "storage", "jobs")
+
+
+_JOB_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9_-]{1,64}$"
+)
+
+
+def _validate_job_id(job_id):
+    if not _JOB_ID_PATTERN.fullmatch(job_id):
+        raise ValueError(
+            "Invalid job ID."
+        )
 
 
 def job_dir(job_id):
@@ -35,6 +49,25 @@ def job_dir(job_id):
     path = os.path.join(STORAGE_ROOT, job_id)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _safe_join(base, *parts):
+    base = os.path.abspath(base)
+    full = os.path.abspath(
+        os.path.join(
+            base,
+            *parts,
+        )
+    )
+
+    if os.path.commonpath(
+        [base, full]
+    ) != base:
+        raise ValueError(
+            "Invalid storage path."
+        )
+
+    return full
 
 
 def path_for(job_id, *relative_parts):
@@ -57,9 +90,12 @@ def path_for(job_id, *relative_parts):
     that folder doesn't exist yet → crash.
 
     '''
-    full_path = os.path.join(job_dir(job_id), *relative_parts)
+    full_path = _safe_join(job_dir(job_id),*relative_parts,)    
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
     return full_path
+
+
+
 
 
 def dir_for(job_id, *relative_parts):

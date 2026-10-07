@@ -4,7 +4,7 @@ step_3_functions_yoloXs_images.py
 
 Reusable functions/classes pulled out of step_3_yoloXs_images.py.
   - ensure_yolox_weights      <- auto-download guard for the ONNX weights
-  - load_yolox_session        <- Section 2 (load the ONNX Runtime session)
+  - load_yolox_session        <- Section 2 (load the OpenVINO model)
   - preprocess                <- Section 3 (unchanged)
   - decode_outputs            <- Section 3 (unchanged)
   - get_truck_boxes           <- Section 3 (unchanged, now takes truck_class_id as a param)
@@ -32,7 +32,7 @@ import numpy as np
 import pandas as pd
 import math
 import urllib.request
-# import onnxruntime as ort
+
 import openvino as ov          # was: import onnxruntime as ort
 
 import time
@@ -60,23 +60,57 @@ _PLATE_CHAR_PATTERN = re.compile(r'^[A-Za-z0-9\s\-]+$')
 
 
 
+
+
+# ===================================================================
+# prepares the YOLOX/OpenVINO detector model
+# ===================================================================
+
+
+def ensure_openvino_variant(
+    onnx_path,
+    output_path,
+    compress_to_fp16,
+    job_id=None,
+):
+    """
+    Create an OpenVINO IR model if it does not already exist.
+
+    compress_to_fp16=False -> true FP32 model
+    compress_to_fp16=True  -> FP16-compressed model
+    """
+
+    if os.path.exists(output_path):
+        return output_path
+
+    emit(
+        f"Converting {os.path.basename(onnx_path)} -> "
+        f"{os.path.basename(output_path)}...",
+        job_id=job_id,
+        stage="detection",
+        ui_message="Preparing detection model for the first run...",
+    )
+
+    model = ov.convert_model(onnx_path)
+
+    ov.save_model(
+        model,
+        output_path,
+        compress_to_fp16=compress_to_fp16,
+    )
+
+    return output_path
+
+
+
+
 # ==============================================================================
 # ── compute_frame_quality_score ────────────────────────────────────────────────
 # ==============================================================================
 
 def compute_frame_quality_score(crop, x1, y1, x2, y2, frame_w, frame_h,
                                  size_sweet_spot_min, size_sweet_spot_max):
-    """
-    REFACTOR NOTE (sweet-spot sizing): size used to be a straight bonus —
-    bigger box always scored higher. That rewarded the truck's closest,
-    biggest, sharpest moment, which (given a fixed side-mounted camera) is
-    also the moment the truck is most side-on to the lens — the one point in
-    its journey LEAST likely to have a visible front plate. This now scores
-    size as a HILL peaking at the midpoint of the sweet-spot window, tapering
-    off toward either edge — genuine eligibility filtering (is this frame
-    even allowed to compete) happens separately, in run_detection_tracking;
-    this score just prefers the center of that window over its edges.
-    """
+    
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
 

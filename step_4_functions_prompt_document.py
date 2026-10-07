@@ -17,6 +17,9 @@ import time
 import subprocess
 from openai import OpenAI
 
+import shlex
+
+
 MODEL_ID = "google/gemma-4-26b-a4b-it:free"
 
 # LiteRT-LM local model config
@@ -61,10 +64,16 @@ def extract_fields(parsed):
     return result
 
 
+
+
+
+
+
+
 # ==============================================================================
 # ── 26B A4B via OpenRouter ─────────────────────────────────────────────────────
 # ==============================================================================
-def call_gemma_api(client, image_path, prompt, retries=3):
+def call_gemma_api(client, image_path, prompt, retries=1):
     b64_image = encode_image_base64(image_path)
     ext = os.path.splitext(image_path)[1].lstrip(".").lower()
     mime = "jpeg" if ext in ("jpg", "jpeg") else ext
@@ -113,14 +122,11 @@ def call_gemma_api(client, image_path, prompt, retries=3):
 # ==============================================================================
 # ── E2B via LiteRT-LM (local) ──────────────────────────────────────────────────
 # ==============================================================================
-def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
+def call_litert_e2b(image_path, prompt, backend="cpu", timeout=600):
     """
     Runs Gemma 4 E2B fully locally via the litert-lm CLI, as a subprocess —
     same pattern as the ffmpeg subprocess.run() call already in step_3.
 
-    ⚠️ UNVERIFIED: the --image flag name below is a PLACEHOLDER. Confirm the
-    real flag by running `litert-lm run --help` and update this before
-    trusting it. Everything else in this function is correct regardless.
     """
     
 
@@ -140,30 +146,59 @@ def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
 
+
+    # --------------------------------------------------
+    # Original LiteRT command
+    # --------------------------------------------------
+    litert_cmd = [
+        "litert-lm",
+        "run",
+        f"--from-huggingface-repo={LITERT_MODEL_REPO}",
+        LITERT_MODEL_FILE,
+        f"--backend={backend}",
+        f"--vision-backend={backend}",
+        "--temperature=0",
+        "--seed=42",
+        "--thinking=false",
+        f"--attachment={image_path}",
+        f"--prompt={prompt}",
+    ]
+
+    # --------------------------------------------------
+    # Docker/Linux requires a pseudo-TTY for LiteRT
+    # vision inference.
+    #
+    # Windows native execution already works directly.
+    # --------------------------------------------------
+    if os.name == "nt":
+        command = litert_cmd
+    else:
+        command = [
+            "script",
+            "-q",
+            "-e",
+            "-c",
+            shlex.join(litert_cmd),
+            "/dev/null",
+        ]
+
+    print(f"[DEBUG] Platform: {os.name}")
+    print(
+        "[DEBUG] LiteRT execution mode: "
+        + ("direct" if os.name == "nt" else "pseudo-TTY via script")
+    )
+
+
     try:
         result = subprocess.run(
-            [
-                "litert-lm",
-                "run",
-                f"--from-huggingface-repo={LITERT_MODEL_REPO}",
-                LITERT_MODEL_FILE,
-                f"--backend={backend}",
-                f"--vision-backend={backend}",
-
-
-                f"--temperature=0",
-                f"--seed=42",
-                f"--thinking=false",
-
-
-                f"--attachment={image_path}",
-                f"--prompt={prompt}",
-            ],
-            capture_output=True, text=True,
-
-            encoding="utf-8", errors="replace",   # "replace" swaps any still-undecodable byte for a placeholder char instead of crashing the whole call
-
-            env=env, timeout=timeout, check=False,
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            timeout=timeout,
+            check=False,
         )
 
         print(f"[DEBUG] Return code: {result.returncode}")
@@ -183,12 +218,27 @@ def call_litert_e2b(image_path, prompt, backend="cpu", timeout=120):
         # extract_json() downstream doesn't have to parse around them.
 
         cleaned_lines = [
-            line for line in result.stdout.splitlines()
+            line
+            for line in result.stdout.splitlines()
             if not line.strip().startswith("Using cached model:")
         ]
-        cleaned_output = "\n".join(cleaned_lines).strip()
-        return cleaned_output
 
+        cleaned_output = "\n".join(cleaned_lines).strip()
+
+
+        # Remove ANSI / terminal escape sequences introduced by pseudo-TTY
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
+        cleaned_output = ansi_escape.sub('', cleaned_output)
+
+        # Normalize pseudo-TTY carriage returns
+        cleaned_output = cleaned_output.replace('\r', '')
+
+        cleaned_output = cleaned_output.strip()
+
+        
+
+        return cleaned_output
 
     except Exception as e:
         print(f"[ERROR] litert-lm call failed: {e}")
